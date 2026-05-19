@@ -1,6 +1,7 @@
 import math
 import torch
 from torch import nn, einsum
+import torch.nn.functional as F
 from functools import partial
 from einops import rearrange
 from einops_exts import rearrange_many
@@ -403,6 +404,49 @@ class SignalEmbedding(nn.Module):
         x = torch.squeeze(x)
         return x
 
+
+class ProjectionHead3D(nn.Module):
+    """
+    Lightweight general projection head:
+    - Input: Arbitrary [B, C_in, F?, H, W] or [B, C_in, H, W] (automatically promoted to 5D)
+    - Output: Same channel number as main output out_ch; resolution automatically resized to main output resolution
+    - Design: Optional 1 intermediate width (1x1x1 conv + GN + SiLU), then 1x1x1 linear layer to out_ch
+    """
+    def __init__(self, in_ch: int, out_ch: int, hidden: int = 0, groups: int = 8):
+        super().__init__()
+        layers = []
+        ch = in_ch
+        if hidden > 0:
+            layers += [nn.Conv3d(ch, hidden, kernel_size=1, stride=1, padding=0),
+                       nn.GroupNorm(groups, hidden),
+                       nn.SiLU()]
+            ch = hidden
+        layers += [nn.Conv3d(ch, out_ch, kernel_size=1, stride=1, padding=0)]
+        self.net = nn.Sequential(*layers)
+
+    @staticmethod
+    def _to_5d(x):
+        # [B, C, H, W] -> [B, C, 1, H, W]
+        if x.dim() == 4:
+            x = x.unsqueeze(2)
+        return x
+
+    def forward(self, feat, target_shape_5d):
+        """
+        feat: Tapped features (4D or 5D)
+        target_shape_5d: Target shape (5D) for aligning F/H/W, e.g., from y_hat.unsqueeze(2).shape
+        """
+        x = self._to_5d(feat)
+        B, C, F_t, H_t, W_t = x.shape
+        _, _, F_o, H_o, W_o = target_shape_5d
+
+        # Resize to main output F/H/W
+        if (F_t, H_t, W_t) != (F_o, H_o, W_o):
+            x = F.interpolate(x, size=(F_o, H_o, W_o), mode='trilinear', align_corners=False)
+
+        return self.net(x)  # Return [B, out_ch, F_o, H_o, W_o]
+
+
 class Unet3D(nn.Module):
     def __init__(
         self,
@@ -423,10 +467,19 @@ class Unet3D(nn.Module):
         cond_to_time = 'add',
         padding_mode = 'zeros',
         sigmoid_last_channel = False,
+        # New: Projection head configuration (backward compatible, default off)
+        use_projection_heads = False,
+        projection_positions = ['encoder', 'bottleneck', 'decoder'],  # Options: 'encoder', 'bottleneck', 'decoder', 'output'
+        projection_hidden_dim = 0,  # Projection head hidden dimension, 0 means no hidden layer
     ):
         super().__init__()
         self.input_channels = channels * (2 if self_condition else 1)
         self.self_condition = self_condition
+        
+        # Projection head configuration
+        self.use_projection_heads = use_projection_heads
+        self.projection_positions = projection_positions if use_projection_heads else []
+        self.projection_hidden_dim = projection_hidden_dim
 
         time_dim = dim * 4
 
@@ -526,6 +579,45 @@ class Unet3D(nn.Module):
         self.combine_conv = torch.nn.Conv2d(init_dim*2, init_dim, kernel_size=1, stride=1, padding=0)
 
         self.sigmoid_last_channel = sigmoid_last_channel
+        
+        # Initialize projection heads
+        self.projection_heads = nn.ModuleDict()
+        if self.use_projection_heads:
+            out_dim_proj = default(out_dim, channels)
+            
+            # encoder projection head - only at last encoder block
+            if 'encoder' in self.projection_positions:
+                encoder_last_dim = dims[-1]  # Last encoder output dimension
+                self.projection_heads['encoder'] = ProjectionHead3D(
+                    in_ch=encoder_last_dim, 
+                    out_ch=out_dim_proj, 
+                    hidden=self.projection_hidden_dim
+                )
+            
+            # bottleneck projection head - get features from middle processing layer
+            if 'bottleneck' in self.projection_positions:
+                self.projection_heads['bottleneck'] = ProjectionHead3D(
+                    in_ch=mid_dim, 
+                    out_ch=out_dim_proj, 
+                    hidden=self.projection_hidden_dim
+                )
+            
+            # decoder projection head - only at last decoder block  
+            if 'decoder' in self.projection_positions:
+                decoder_last_dim = dims[0]  # First dimension, i.e., last decoder output dimension
+                self.projection_heads['decoder'] = ProjectionHead3D(
+                    in_ch=decoder_last_dim, 
+                    out_ch=out_dim_proj, 
+                    hidden=self.projection_hidden_dim
+                )
+            
+            # output projection head - get features from final output
+            if 'output' in self.projection_positions:
+                self.projection_heads['output'] = ProjectionHead3D(
+                    in_ch=out_dim_proj, 
+                    out_ch=out_dim_proj, 
+                    hidden=self.projection_hidden_dim
+                )
 
     def forward_with_guidance_scale(
         self,
@@ -545,12 +637,17 @@ class Unet3D(nn.Module):
         time,
         x_self_cond = None,
         cond = None,
-        null_cond_prob = 0.
+        null_cond_prob = 0.,
+        return_projections = False,  # Whether to return projection results
     ):
         batch, device = x.shape[0], x.device
+        
+        # Projection results storage
+        projections = {} if return_projections and self.use_projection_heads else None
 
         # reshape x to video-like input (since this U-Net is designed for video)
         video_flag = False
+        original_input_shape = x.shape  # Save original input shape for computing target shape
         if len(x.shape) == 3:            
             x = generalized_b_xy_c_to_image(x)
             x = x.unsqueeze(2)
@@ -560,6 +657,19 @@ class Unet3D(nn.Module):
             video_flag = True
         else:
             raise ValueError('Input must be image [BxCxPxP] or image sequence [BxCxFxPxP].')
+        
+        # Compute target shape of final output (for projection head alignment)
+        if projections is not None:
+            out_dim_actual = default(self.final_conv[-1].out_channels, len(original_input_shape) > 3 and original_input_shape[1] or 2)
+            if video_flag:
+                target_output_shape = (batch, out_dim_actual, original_input_shape[2], original_input_shape[3], original_input_shape[4])
+            else:
+                # Image input case
+                if len(original_input_shape) == 4:
+                    target_output_shape = (batch, out_dim_actual, 1, original_input_shape[2], original_input_shape[3])
+                else:  # len == 3
+                    H = W = int(original_input_shape[1] ** 0.5)
+                    target_output_shape = (batch, out_dim_actual, 1, H, W)
 
         if self.self_condition:
             x_self_cond = default(x_self_cond, lambda: torch.zeros_like(x))
@@ -591,22 +701,43 @@ class Unet3D(nn.Module):
 
         h = []
 
-        for block1, block2, spatial_attn, downsample in self.downs:
+        # Encoder path
+        for i, (block1, block2, spatial_attn, downsample) in enumerate(self.downs):
             x = block1(x, t)
             x = block2(x, t)
             x = spatial_attn(x)
             h.append(x)
+            
+            # Only tap at last encoder block
+            if (projections is not None and 'encoder' in self.projection_heads and 
+                i == len(self.downs) - 1):  # Last encoder
+                proj_result = self.projection_heads['encoder'](x, target_output_shape)
+                projections['encoder'] = proj_result.squeeze(2) if not video_flag else proj_result
+            
             x = downsample(x)
 
         x = self.mid_block1(x, t)
         x = self.mid_spatial_attn(x)
         x = self.mid_block2(x, t)
+        
+        # Bottleneck projection head tap
+        if projections is not None and 'bottleneck' in self.projection_heads:
+            proj_result = self.projection_heads['bottleneck'](x, target_output_shape)
+            projections['bottleneck'] = proj_result.squeeze(2) if not video_flag else proj_result
 
-        for block1, block2, spatial_attn, upsample in self.ups:
+        # Decoder path
+        for i, (block1, block2, spatial_attn, upsample) in enumerate(self.ups):
             x = torch.cat((x, h.pop()), dim = 1)
             x = block1(x, t)
             x = block2(x, t)
             x = spatial_attn(x)
+            
+            # Only tap at last decoder block
+            if (projections is not None and 'decoder' in self.projection_heads and 
+                i == len(self.ups) - 1):  # Last decoder
+                proj_result = self.projection_heads['decoder'](x, target_output_shape)
+                projections['decoder'] = proj_result.squeeze(2) if not video_flag else proj_result
+            
             x = upsample(x)
 
         x = torch.cat((x, r), dim = 1)
@@ -615,9 +746,20 @@ class Unet3D(nn.Module):
         # reshape to image if we have image-like data as input
         if not video_flag:
             x = x.squeeze(2)
+        
+        # Output projection head tap
+        if projections is not None and 'output' in self.projection_heads:
+            x_for_proj = x.unsqueeze(2) if not video_flag else x
+            projections['output'] = self.projection_heads['output'](x_for_proj, target_output_shape)
+            if not video_flag:
+                projections['output'] = projections['output'].squeeze(2)
 
         if self.sigmoid_last_channel:
             # NOTE apply sigmoid on last channel of x to force E-field to be in [0,1]
             x[:, -1] = torch.sigmoid(x[:, -1])
 
-        return x
+        # Return result
+        if return_projections and self.use_projection_heads:
+            return x, projections
+        else:
+            return x

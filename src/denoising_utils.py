@@ -9,7 +9,6 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 import imageio
 from einops import reduce, rearrange
-from src.residuals_mechanics_K import *
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
