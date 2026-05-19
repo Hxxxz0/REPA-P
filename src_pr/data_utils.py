@@ -1,4 +1,6 @@
+import pickle
 import torch
+import torch.nn.functional as F
 from torch.utils import data
 from pathlib import Path
 import numpy as np
@@ -117,6 +119,207 @@ class Dataset_Paths(data.Dataset):
         data_np = np.load(self.paths[index], allow_pickle = True, encoding = 'latin1')
         data = torch.tensor(data_np.transpose(2, 0, 1), dtype = self.dtype) # vf_arr, strain_energy_density_fem, von_mises_stress, disp_x, disp_y, E_field, BC_node_x, BC_node_y, load_x_img, load_y_img x pixels x pixels
         return data
+
+
+def _dst1(x: np.ndarray) -> np.ndarray:
+    """
+    Type-I discrete sine transform (DST-I) implemented via FFT.
+    Matches `charge_residual.py`.
+    """
+    x = np.asarray(x)
+    n = x.shape[-1]
+    y = np.zeros(x.shape[:-1] + (2 * (n + 1),), float)
+    y[..., 1 : n + 1] = x
+    y[..., n + 2 :] = -x[..., ::-1]
+    Y = np.fft.fft(y, axis=-1)
+    return -Y.imag[..., 1 : n + 1]
+
+
+def _idst1(X: np.ndarray) -> np.ndarray:
+    """Inverse DST-I."""
+    return _dst1(X) / (2 * (X.shape[-1] + 1))
+
+
+def solve_poisson_dst_dirichlet0(rho: np.ndarray, h: float) -> np.ndarray:
+    """
+    Solve (-Δ)U = rho on a square interior grid with homogeneous Dirichlet boundary conditions (U=0 on boundary),
+    using DST. Returns U on the interior grid (same shape as rho).
+    """
+    N = rho.shape[0]
+    rho_hat = _dst1(_dst1(rho.T).T)
+    m = np.arange(1, N + 1)
+    n = np.arange(1, N + 1)
+    lam_m = 2.0 * (1 - np.cos(np.pi * m / (N + 1))) / (h * h)
+    lam_n = 2.0 * (1 - np.cos(np.pi * n / (N + 1))) / (h * h)
+    lam_2d = lam_m[:, None] + lam_n[None, :]
+    U_hat = rho_hat / lam_2d
+    return _idst1(_idst1(U_hat.T).T)
+
+
+class DatasetCharge(data.Dataset):
+    """
+    Synthetic dataset for Poisson electrostatics:
+        (-Δ)U = rho
+
+    Returns a tensor shaped [2, P, P] with channels [U_full, rho_full],
+    where boundary values are zero (Dirichlet 0), and the interior is solved via DST.
+    """
+
+    def __init__(
+        self,
+        no_points: int,
+        pixels_per_dim: int,
+        domain_length: float = 1.0,
+        charges_per_sample: int = 2,
+        charge_mag_range=(0.5, 1.5),
+        margin: int | None = None,
+        seed: int = 0,
+        use_double: bool = False,
+    ):
+        super().__init__()
+        if pixels_per_dim < 4:
+            raise ValueError("pixels_per_dim must be >= 4 (need boundary + interior).")
+        if charges_per_sample < 1:
+            raise ValueError("charges_per_sample must be >= 1.")
+
+        self.no_points = int(no_points)
+        self.P = int(pixels_per_dim)
+        self.N = self.P - 2  # interior size for DST
+        self.domain_length = float(domain_length)
+        self.h = self.domain_length / (self.P - 1)  # consistent with pixels_at_boundary=True
+        self.charges_per_sample = int(charges_per_sample)
+        self.charge_mag_range = tuple(charge_mag_range)
+        self.seed = int(seed)
+        self.use_double = bool(use_double)
+        self.dtype = np.float64 if use_double else np.float32
+
+        if margin is None:
+            # keep charges away from interior boundary; mimic charge_residual default spirit
+            margin = max(1, self.N // 8)
+        self.margin = int(min(margin, max(1, self.N // 2 - 1)))
+
+    def __len__(self):
+        return self.no_points
+
+    def _rng_for_index(self, index: int) -> np.random.Generator:
+        # deterministic per index (stable under DataLoader with shuffle=False)
+        return np.random.default_rng(self.seed + int(index))
+
+    def __getitem__(self, index: int):
+        if index >= self.no_points:
+            raise IndexError("index out of range")
+
+        rng = self._rng_for_index(index)
+
+        # interior rho
+        rho = np.zeros((self.N, self.N), dtype=self.dtype)
+
+        lo, hi = self.charge_mag_range
+        # sample random point charges
+        for _ in range(self.charges_per_sample):
+            sign = rng.choice([-1.0, 1.0])
+            mag = rng.uniform(lo, hi)
+            q = sign * mag
+
+            x = rng.integers(self.margin, self.N - self.margin)
+            y = rng.integers(self.margin, self.N - self.margin)
+            rho[x, y] += q / (self.h * self.h)  # charge density per cell-area
+
+        # solve on interior
+        U = solve_poisson_dst_dirichlet0(rho, self.h).astype(self.dtype, copy=False)
+
+        # embed into full grid with zero boundary
+        U_full = np.zeros((self.P, self.P), dtype=self.dtype)
+        rho_full = np.zeros((self.P, self.P), dtype=self.dtype)
+        U_full[1:-1, 1:-1] = U
+        rho_full[1:-1, 1:-1] = rho
+
+        out = np.stack([U_full, rho_full], axis=0)  # [2, P, P]
+        torch_dtype = torch.float64 if self.use_double else torch.float32
+        return torch.tensor(out, dtype=torch_dtype)
+
+
+class DatasetTurbulentPickle(data.Dataset):
+    """
+    Turbulent channel-flow dataset from ``ch_2Dxysec.pickle``.
+
+    The original data layout is ``[T, X, Y, 1]`` with shape ``[10000, 128, 48, 1]``.
+    To stay compatible with the Darcy-style training path in ``last1``, each sample is:
+
+    1. converted to channel-first image layout ``[1, X, Y]``
+    2. globally normalized by max-abs value
+    3. resized to ``[1, pixels_per_dim, pixels_per_dim]`` (default: ``64x64``)
+    """
+
+    def __init__(
+        self,
+        data_path,
+        pixels_per_dim: int = 64,
+        split: str = 'train',
+        train_fraction: float = 0.9,
+        use_double: bool = False,
+        normalize_mode: str = 'maxabs',
+    ):
+        super().__init__()
+        if split not in {'train', 'valid'}:
+            raise ValueError("split must be 'train' or 'valid'")
+        if not (0.0 < train_fraction < 1.0):
+            raise ValueError('train_fraction must be in (0, 1).')
+
+        self.data_path = Path(data_path)
+        if not self.data_path.exists():
+            raise FileNotFoundError(f'Turbulent dataset not found: {self.data_path}')
+
+        self.pixels_per_dim = int(pixels_per_dim)
+        self.split = split
+        self.use_double = bool(use_double)
+        self.dtype = torch.float64 if self.use_double else torch.float32
+
+        with self.data_path.open('rb') as f:
+            data_np = pickle.load(f)
+
+        data_np = np.asarray(data_np, dtype=np.float32)
+        if data_np.ndim != 4 or data_np.shape[-1] != 1:
+            raise ValueError(
+                f'Expected turbulent data shaped [T, X, Y, 1], got {data_np.shape}'
+            )
+
+        if normalize_mode == 'maxabs':
+            scale = float(np.abs(data_np).max())
+            if scale > 0.0:
+                data_np = data_np / scale
+        elif normalize_mode != 'none':
+            raise ValueError("normalize_mode must be 'maxabs' or 'none'")
+
+        data = torch.tensor(data_np, dtype=torch.float32).permute(0, 3, 1, 2)  # [T, 1, X, Y]
+        if data.shape[-2:] != (self.pixels_per_dim, self.pixels_per_dim):
+            data = F.interpolate(
+                data,
+                size=(self.pixels_per_dim, self.pixels_per_dim),
+                mode='bilinear',
+                align_corners=False,
+            )
+
+        n_total = data.shape[0]
+        n_train = max(1, int(round(n_total * train_fraction)))
+        if n_train >= n_total:
+            n_train = n_total - 1
+
+        if split == 'train':
+            self.data = data[:n_train]
+        else:
+            self.data = data[n_train:]
+
+        self.data = self.data.to(self.dtype)
+        self.num_datapoints = len(self.data)
+
+    def __len__(self):
+        return self.num_datapoints
+
+    def __getitem__(self, index):
+        if index >= self.num_datapoints:
+            raise IndexError('index out of range')
+        return self.data[index]
 
 def sample_images_with_squares(no_points, pixels_per_dim, dim, frame_dim = False, use_double = False):
 

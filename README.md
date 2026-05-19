@@ -1,102 +1,176 @@
-# Learning to Think in Physics: Breaking Shortcut Learning in Scientific Diffusion via Representation Alignment
+<h1 align="center">REPA-P for Physics-Informed Diffusion Models</h1>
 
-Physics-informed diffusion model for solving PDEs. Demonstrates representation alignment by enforcing physical constraints on intermediate latent features through projection heads, improving generalization and physical consistency.
+<h4 align="center">U-Net code for PIDM baseline and REPA-P</h4>
 
-## Quick Start
+$~$
+
+## Introduction & Setup
+
+This repository contains the U-Net implementation used in our REPA-P experiments, built on top of Physics-Informed Diffusion Models (PIDM).
+
+The code supports both methods with the same training script:
+
+```yaml
+use_projection_heads: False  # PIDM baseline
+use_projection_heads: True   # REPA-P
+```
+
+We provide two main scripts:
+
+`main.py` trains the model. Change the dataset, run name, and projection-head switch in `model.yaml`, then run:
 
 ```bash
-# Install dependencies
-pip install -r requirements.txt
+python main.py --config model.yaml --gpu 0
+```
 
-# Generate training data
-python src/data_generation_poisson_v2.py
+`sample.py` evaluates trained models. It reads the saved `model.yaml` from the checkpoint folder, so the same script works for both PIDM and REPA-P:
 
-# Train baseline model
-python main_poisson.py --config model_poisson_v2_bs8.yaml
+```bash
+python sample.py --name darcy.repap.unet --gpu 0
+```
 
-# Train model with projection heads (ours)
-python main_poisson.py --config model_poisson_v2_bs8_proj_bottleneck.yaml
+## Data
 
-# Evaluate
-python sample_poisson.py \
-    --checkpoint trained_models/poisson_v2_bs8_proj_bottleneck/model/checkpoint_20000.pt \
-    --config trained_models/poisson_v2_bs8_proj_bottleneck/config.yaml \
-    --output_dir results/bottleneck
+Datasets and checkpoints are not included. Download the data separately and place it as follows:
+
+```text
+.
+├── data
+│   ├── darcy
+│   │   ├── train
+│   │   │   ├── p_data.csv
+│   │   │   └── K_data.csv
+│   │   └── valid
+│   │       ├── p_data.csv
+│   │       └── K_data.csv
+│   ├── mechanics
+│   │   ├── train/fields
+│   │   ├── test/valid/fields
+│   │   ├── test/test_level_1/fields
+│   │   ├── test/test_level_2/fields
+│   │   └── solidspy_k_no_BC
+│   └── ch_2Dxysec.pickle
+└── trained_models
+    └── ...
+```
+
+The `charge` task is generated synthetically and does not require downloaded data.
+
+## How to Run
+
+All settings are in `model.yaml`.
+
+Choose one dataset:
+
+```yaml
+gov_eqs: darcy       # darcy, mechanics, charge, turbulent
+```
+
+Choose PIDM baseline:
+
+```yaml
+run_name: darcy.pidm.unet
+use_projection_heads: False
+projection_positions: []
+projection_hidden_dim: 0
+c_projection: 0.0
+```
+
+Or choose REPA-P:
+
+```yaml
+run_name: darcy.repap.unet
+use_projection_heads: True
+projection_positions: decoder
+projection_hidden_dim: 128
+c_projection: 0.01
+```
+
+Then train:
+
+```bash
+python main.py --config model.yaml --gpu 0
+```
+
+Training outputs are saved to:
+
+```text
+trained_models/<run_name>/
+```
+
+## Dataset Settings
+
+Use these typical settings in `model.yaml`:
+
+```yaml
+# Darcy
+gov_eqs: darcy
+train_iterations: 150000
+train_batch_size: 64
+c_ineq: 0.0
+lambda_opt: 0.0
+```
+
+```yaml
+# Mechanics
+gov_eqs: mechanics
+train_iterations: 300000
+train_batch_size: 8
+c_ineq: 0.001
+lambda_opt: 0.1
+```
+
+```yaml
+# Charge
+gov_eqs: charge
+train_iterations: 150000
+train_batch_size: 64
+c_ineq: 0.0
+lambda_opt: 0.0
+```
+
+```yaml
+# Turbulent
+gov_eqs: turbulent
+train_iterations: 150000
+train_batch_size: 64
+turbulent_data_path: ./data/ch_2Dxysec.pickle
+```
+
+## Evaluation
+
+Evaluate the latest checkpoint:
+
+```bash
+python sample.py --name darcy.repap.unet --gpu 0
+```
+
+Evaluate a specific checkpoint:
+
+```bash
+python sample.py --name darcy.repap.unet --step 150000 --gpu 0 --num-batches 4 --save-images
+```
+
+Results are written to:
+
+```text
+trained_models/<run_name>/evaluation/step_<step>/
 ```
 
 ## Dependencies
 
+Install dependencies with:
+
 ```bash
 pip install -r requirements.txt
 ```
 
-Required packages:
-- `torch`
-- `numpy`
-- `pandas`
-- `matplotlib`
-- `tqdm`
-- `pyyaml`
-- `einops`
+Main packages include `torch`, `numpy`, `pandas`, `matplotlib`, `tqdm`, `einops`, `torchvision`, `findiff`, `solidspy`, `scikit-image`, `pyyaml`, and `imageio`.
 
-## Usage
+## Notes
 
-This repository contains a toy experiment demonstrating the concept on **Electrostatic Charge Potential generation** governed by the Poisson equation: $(- \Delta)U = \rho$.
+This release is U-Net only. DiT code, datasets, checkpoints, logs, and generated images are intentionally excluded. Do not upload `data/` or `trained_models/` to arXiv.
 
-### 1. Data Generation
+## Citation
 
-First, generate the training and validation data (pairs of charge density $\rho$ and potential $U$). This uses the V2 data generation script which properly normalizes physical quantities.
-
-```bash
-# Generate data (default: 20000 training samples, 2000 validation samples)
-python src/data_generation_poisson_v2.py
-```
-
-Data will be saved to `data/poisson_v2/`.
-
-### 2. Training
-
-You can train two versions of the model for comparison:
-
-**A. Baseline (Standard Diffusion Model)**
-This model uses standard diffusion training without internal physical constraints.
-
-```bash
-python main_poisson.py --config model_poisson_v2_bs8.yaml
-```
-
-**B. Ours (Physical Representation Alignment)**
-This model adds a projection head at the **bottleneck** layer, forcing the latent features to be decodable into physically valid states (low PDE residual).
-
-```bash
-python main_poisson.py --config model_poisson_v2_bs8_proj_bottleneck.yaml
-```
-
-**Training Logs & Checkpoints:**
-- Models are saved to `trained_models/`
-- Training curves are saved as PNGs in the same directory
-- Checkpoints are saved every 5000 iterations (configurable via `save_freq`)
-
-### 3. Sampling & Evaluation
-
-To evaluate a trained model and visualize the results (including physical consistency):
-
-```bash
-# Evaluate Baseline
-python sample_poisson.py \
-    --checkpoint trained_models/poisson_v2_bs8/model/checkpoint_20000.pt \
-    --config trained_models/poisson_v2_bs8/config.yaml \
-    --output_dir results/baseline
-
-# Evaluate Ours (Bottleneck)
-python sample_poisson.py \
-    --checkpoint trained_models/poisson_v2_bs8_proj_bottleneck/model/checkpoint_20000.pt \
-    --config trained_models/poisson_v2_bs8_proj_bottleneck/config.yaml \
-    --output_dir results/bottleneck
-```
-
-This will generate:
-- Comparison plots (Ground Truth vs Generated)
-- Visualization of Potential Field ($U$) and Charge Density ($\rho$)
-- Statistics (L2 Error, PDE Residual)
-
+If this code is useful for your research, please cite PIDM and our accompanying paper.

@@ -1,48 +1,9 @@
-# Data and trained models
-data/
+data/**
+!data/**/
+!data/**/.gitkeep
 trained_models/
-
-# Python cache
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-
-# Distribution / packaging
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-
-# PyTorch
-*.pt
-*.pth
-
-# Jupyter Notebook
-.ipynb_checkpoints
-
-# IDEs
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Logs
+outputs/
 *.log
+__pycache__/
+*.pyc
+.ipynb_checkpoints/

@@ -1,5 +1,7 @@
 import os, yaml
 from pathlib import Path
+from typing import Optional, Sequence
+
 import numpy as np
 import torch
 import torch.nn as nn
@@ -9,6 +11,8 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 import imageio
 from einops import reduce, rearrange
+from src_pr.residuals_mechanics_K import *
+from src_pr.unet_new import generalized_image_to_b_xy_c, generalized_b_xy_c_to_image
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -28,9 +32,13 @@ def hdr_plot_style():
 hdr_plot_style()
 
 def fix_seeds(seed=42):
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed(seed)
-    np.random.seed(seed)
+    # NumPy legacy RNG 要求 seed ∈ [0, 2**32-1]；训练/评估里用 step、t 组合时易溢出，先折叠。
+    s = int(seed) % (2**32 - 1)
+    if s <= 0:
+        s = 1
+    torch.manual_seed(s)
+    torch.cuda.manual_seed(s)
+    np.random.seed(s)
 
 def image_to_b_xy_c(tensor):
     """
@@ -318,7 +326,7 @@ class DenoisingDiffusion(nn.Module):
         diff_dict['alphas'] = 1. - diff_dict['betas']
         diff_dict['sqrt_recip_alphas'] = torch.sqrt(1. / diff_dict['alphas'])
         diff_dict['alphas_prod'] = torch.cumprod(diff_dict['alphas'], 0)
-        diff_dict['alphas_prod_p'] = torch.cat([torch.tensor([1], device=device).float(), diff_dict['alphas_prod'][:-1]], 0)
+        diff_dict['alphas_prod_p'] = torch.cat([torch.tensor([1], device=self.device).float(), diff_dict['alphas_prod'][:-1]], 0)
         diff_dict['alphas_bar_sqrt'] = torch.sqrt(diff_dict['alphas_prod'])
         diff_dict['sqrt_recip_alphas_cumprod'] = torch.sqrt(1. / diff_dict['alphas_prod'])
         diff_dict['sqrt_recipm1_alphas_cumprod'] = torch.sqrt(1. / diff_dict['alphas_prod'] - 1)
@@ -388,8 +396,14 @@ class DenoisingDiffusion(nn.Module):
                 save_output = False, surpress_noise = False, 
                 use_dynamic_threshold = False, residual_func = None, eval_residuals = False,
                 return_optimizer = False, return_inequality = False, residual_correction = False,
-                correction_mode = 'none'):
-        
+                correction_mode = 'none', collect_physics_per_step = False,
+                trace_c_residual: Optional[float] = None,
+                model_timestep: Optional[int] = None):
+        """
+        model_timestep: if set, UNet / residual sees this discrete time index instead of `t`.
+        Used when sampling uses T_sample > T_train: diffusion coefs use `t` into this object's
+        diff_dict (length T_sample), while the network is conditioned on train-time steps.
+        """
         x_init = x.clone().detach()        
         if conditioning_input is not None:
             conditioning, bcs, solution = conditioning_input 
@@ -397,22 +411,24 @@ class DenoisingDiffusion(nn.Module):
         batch_size = len(x)
         assert correction_mode in ['x0', 'xt'] or not residual_correction, 'Correction mode unknown or not given.'
         
-        t = torch.tensor([t], device=x.device)
+        t_coef = torch.tensor([t], device=x.device, dtype=torch.long)
+        t_model = int(model_timestep) if model_timestep is not None else int(t)
+        t_model_batch = torch.full((batch_size,), t_model, device=x.device, dtype=torch.long)
         model_input = image_to_b_xy_c(x) # we reshape this later to an image in U-net model class but let's be consistent here with the operator model
-        model_input = (model_input, t.repeat(batch_size))
+        model_input = (model_input, t_model_batch)
 
         model_intermediate = None
         
         # model output
         # evaluate residuals at last timestep if required
-        if residual_func.gov_eqs == 'darcy':
+        if residual_func.gov_eqs in ('darcy', 'charge', 'turbulent'):
             residual_input = (model_input, )
             sample = True
         if residual_func.gov_eqs == 'mechanics':       
             vf = conditioning[:,0,0,0]
             # vf = x_0[:,2].mean((1,2))
             residual_input = (model_input, bcs, vf, solution)
-            if t[0] == 0:
+            if t_coef[0] == 0:
                 sample = True
             else:
                 sample = False
@@ -438,17 +454,17 @@ class DenoisingDiffusion(nn.Module):
             model_intermediate = model_out.clone().detach()
         x0_pred = model_out
         mean = (
-            extract(self.diff_dict['posterior_mean_coef1'], t, x_init) * x0_pred +
-            extract(self.diff_dict['posterior_mean_coef2'], t, x_init) * x_init
+            extract(self.diff_dict['posterior_mean_coef1'], t_coef, x_init) * x0_pred +
+            extract(self.diff_dict['posterior_mean_coef2'], t_coef, x_init) * x_init
         )
 
         # Generate z
         z = torch.randn_like(x_init, device=x.device)
         # Fixed sigma
-        sigma_t = extract(self.diff_dict['betas'], t, x_init).sqrt()
+        sigma_t = extract(self.diff_dict['betas'], t_coef, x_init).sqrt()
         # no noise when t == 0
         if surpress_noise:
-            nonzero_mask = (1. - (t == 0).float())
+            nonzero_mask = (1. - (t_coef == 0).float())
         else:
             nonzero_mask = 1.
         sample = mean + nonzero_mask * sigma_t * z
@@ -470,11 +486,30 @@ class DenoisingDiffusion(nn.Module):
                 x = x.clamp(-s, s) / s
                 return x
             sample = maybe_clip(sample)
+
+        trace_dict = None
+        if collect_physics_per_step:
+            with torch.no_grad():
+                trace_dict = {
+                    't': int(t_coef[0].item()),
+                    'physics_residual_mean_abs': float(residual.detach().float().abs().mean().cpu()),
+                }
+                # 与 model_estimation_loss 中 residual 项一致：c_residual * (- log p(r|0))
+                if trace_c_residual is not None:
+                    t_batch = torch.full(
+                        (batch_size,), int(t_coef[0].item()), device=residual.device, dtype=torch.long
+                    )
+                    var = extract(self.diff_dict['posterior_variance_clipped'], t_batch, residual)
+                    residual_log_likelihood = self.gaussian_log_likelihood(
+                        torch.zeros_like(residual), means=residual, variance=var
+                    )
+                    physics_loss = (float(trace_c_residual) * (-1.0) * residual_log_likelihood).mean()
+                    trace_dict['physics_loss_mean'] = float(physics_loss.detach().cpu())
         
-        if (t[0] == 0 and eval_residuals):
+        if (t_coef[0] == 0 and eval_residuals):
             aux_out = {}
             aux_out['residual'] = residual
-            if return_optimizer:
+            if return_optimizer and ('optimizer' in out_dict):
                 aux_out['optimized_quant'] = out_dict['optimizer']
             if return_inequality:
                 aux_out['inequality_quant'] = out_dict['inequality']
@@ -483,8 +518,17 @@ class DenoisingDiffusion(nn.Module):
                     aux_out['rel_CE_error_full_batch'] = out_dict['rel_CE_error_full_batch']
                     aux_out['vf_error_full_batch'] = out_dict['vf_error_full_batch']
                     aux_out['fm_error_full_batch'] = out_dict['fm_error_full_batch']
+            if trace_dict is not None:
+                aux_out['physics_per_step_t'] = trace_dict['t']
+                aux_out['physics_residual_mean_abs'] = trace_dict['physics_residual_mean_abs']
+                if 'physics_loss_mean' in trace_dict:
+                    aux_out['physics_loss_mean'] = trace_dict['physics_loss_mean']
+                # p_sample_loop(collect_physics_per_step) 读 output[1]['t']；t==0 分支此前只有 physics_per_step_t
+                aux_out['t'] = trace_dict['t']
 
             return (sample, model_intermediate), aux_out
+        elif trace_dict is not None:
+            return (sample, model_intermediate), trace_dict
         else:
             return (sample, model_intermediate), None
 
@@ -502,7 +546,15 @@ class DenoisingDiffusion(nn.Module):
                     return_inequality = False,
                     M_correction = 0,
                     N_correction = 0,
-                    correction_mode = 'none'):
+                    correction_mode = 'none',
+                    collect_physics_per_step = False,
+                    trace_c_residual: Optional[float] = None,
+                    model_timestep_override: Optional[Sequence[int]] = None):
+
+        if model_timestep_override is not None:
+            assert len(model_timestep_override) == self.n_steps, (
+                f"model_timestep_override length {len(model_timestep_override)} != n_steps {self.n_steps}"
+            )
 
         cur_x = torch.randn(shape, device=self.diff_dict['alphas'].device)
         x_seq = [cur_x.detach().cpu()]
@@ -513,6 +565,7 @@ class DenoisingDiffusion(nn.Module):
             interm_imgs = []
 
         interm_img = None
+        physics_trajectory = []
         for i in reversed(range(self.n_steps)):
             
             # CoCoGen correction
@@ -520,15 +573,26 @@ class DenoisingDiffusion(nn.Module):
             if i < N_correction:
                 residual_correction = True
                 eval_residuals = True
+
+            mt = model_timestep_override[i] if model_timestep_override is not None else None
                 
             output = self.p_sample(cur_x.detach(), conditioning_input, i, save_output, surpress_noise, use_dynamic_threshold,
                                         residual_func = residual_func, eval_residuals = eval_residuals,
                                         return_optimizer = return_optimizer, return_inequality = return_inequality,
-                                        residual_correction = residual_correction, correction_mode = correction_mode)
+                                        residual_correction = residual_correction, correction_mode = correction_mode,
+                                        collect_physics_per_step = collect_physics_per_step,
+                                        trace_c_residual = trace_c_residual,
+                                        model_timestep = mt)
             cur_x, interm_img = output[0]
+            if collect_physics_per_step and output[1] is not None and 'physics_residual_mean_abs' in output[1]:
+                row = {'t': output[1]['t'], 'physics_residual_mean_abs': output[1]['physics_residual_mean_abs']}
+                if 'physics_loss_mean' in output[1]:
+                    row['physics_loss_mean'] = output[1]['physics_loss_mean']
+                physics_trajectory.append(row)
 
             x_seq.append(cur_x.detach().cpu())
-            interm_imgs.append(interm_img.detach().cpu())
+            if interm_img is not None:
+                interm_imgs.append(interm_img.detach().cpu())
 
         # CoCoGen correction
         for i in range(M_correction):
@@ -539,7 +603,13 @@ class DenoisingDiffusion(nn.Module):
                 output[1]['residual'] = residual
             
         if eval_residuals:
-            return (x_seq, interm_imgs), output[1]
+            final_aux = output[1]
+            if collect_physics_per_step and final_aux is not None:
+                final_aux = dict(final_aux)
+                final_aux['physics_trajectory'] = physics_trajectory
+            return (x_seq, interm_imgs), final_aux
+        if collect_physics_per_step:
+            return (x_seq, interm_imgs), {'physics_trajectory': physics_trajectory}
         else:
             return x_seq, interm_imgs
 
@@ -618,12 +688,24 @@ class DenoisingDiffusion(nn.Module):
                               c_data = 1.,
                               c_residual = 0.,
                               c_ineq = 0., 
-                              lambda_opt = 0.):
-
+                              lambda_opt = 0.,
+                              use_projection_heads = False,
+                              c_projection = 0.1,
+                              t_fixed: Optional[int] = None):
+        """
+        t_fixed: 若给定，整批样本使用该扩散索引 t（与训练前向一致，用于「每个 t 的 loss」曲线/表）。
+        默认 None：每个样本随机 t，与常规训练一致。
+        """
         batch_size = len(input)
-        t = torch.randint(0, self.n_steps, size=(batch_size,), device=input.device)
+        if t_fixed is not None:
+            ti = int(t_fixed)
+            if ti < 0 or ti >= self.n_steps:
+                raise ValueError(f"t_fixed={ti} 须在 [0, {self.n_steps - 1}]")
+            t = torch.full((batch_size,), ti, device=input.device, dtype=torch.long)
+        else:
+            t = torch.randint(0, self.n_steps, size=(batch_size,), device=input.device)
         
-        if residual_func.gov_eqs == 'darcy':
+        if residual_func.gov_eqs in ('darcy', 'charge', 'turbulent'):
             x_0 = input
         if residual_func.gov_eqs == 'mechanics':            
             conditioning, x_0, bcs = torch.tensor_split(input, (3, 6), dim=1) # vf_arr, strain_energy_density_fem, von_mises_stress, disp_x, disp_y, E_field, BC_node_x, BC_node_y, load_x_img, load_y_img
@@ -644,25 +726,41 @@ class DenoisingDiffusion(nn.Module):
 
         return_inequality = False
         return_optimizer = False
-        if c_ineq > 0.:
+        if c_ineq > 0. and residual_func.gov_eqs == 'mechanics':
             return_inequality = True
-        if lambda_opt > 0. or residual_func.gov_eqs == 'mechanics':
+        # `optimizer` quantity is only implemented for mechanics residuals.
+        # Avoid requesting it for darcy/charge/turbulent (their compute_residual does not return it).
+        if lambda_opt > 0. and residual_func.gov_eqs == 'mechanics':
             return_optimizer = True
 
-        if residual_func.gov_eqs == 'darcy':
+        if residual_func.gov_eqs in ('darcy', 'charge', 'turbulent'):
             residual_input = (model_input, )
         if residual_func.gov_eqs == 'mechanics':
             vf = conditioning[:,0,0,0]
             residual_input = (model_input, bcs, vf, x_0)
 
-        out_dict = residual_func.compute_residual(residual_input,
-                                                  reduce='per-batch', 
-                                                  return_model_out = True, 
-                                                  return_optimizer = return_optimizer, 
-                                                  return_inequality = return_inequality,
-                                                  ddim_func = self.ddim_sample_x0)
-        
-        residual, output = out_dict['residual'], out_dict['model_out']
+        # 检查是否使用投影头
+        if use_projection_heads and hasattr(residual_func.model, 'use_projection_heads') and residual_func.model.use_projection_heads:
+            # 使用投影头的模型调用
+            out_dict = residual_func.compute_residual(residual_input,
+                                                      reduce='per-batch', 
+                                                      return_model_out = True, 
+                                                      return_optimizer = return_optimizer, 
+                                                      return_inequality = return_inequality,
+                                                      ddim_func = self.ddim_sample_x0,
+                                                      return_projections = True)
+            residual, output = out_dict['residual'], out_dict['model_out']
+            projections = out_dict.get('projections', {})
+        else:
+            # 原始模型调用
+            out_dict = residual_func.compute_residual(residual_input,
+                                                      reduce='per-batch', 
+                                                      return_model_out = True, 
+                                                      return_optimizer = return_optimizer, 
+                                                      return_inequality = return_inequality,
+                                                      ddim_func = self.ddim_sample_x0)
+            residual, output = out_dict['residual'], out_dict['model_out']
+            projections = {}
 
         # reshape output to image (batch_size, channels, pixels, pixels)
         if len(output.shape) == 3:
@@ -688,25 +786,94 @@ class DenoisingDiffusion(nn.Module):
 
         residual_log_likelihood = self.gaussian_log_likelihood(torch.zeros_like(residual), means=residual, variance=var)
         residual_loss = c_residual * -1. * residual_log_likelihood
+        # 注释掉残差损失，只使用数据损失
         loss += residual_loss.mean()
 
         ineq_loss_track = 0.
-        if return_inequality:
+        if return_inequality and 'inequality' in out_dict:
             # add negative inequality residual log-likelihood, i.e., - log p(r_ineq|x_0_pred(x_0)) (similar to above)
             ineq_log_likelihood = self.gaussian_log_likelihood(torch.zeros_like(out_dict['inequality']), means=out_dict['inequality'], variance=var)
             ineq_loss = c_ineq * -1. * ineq_log_likelihood
             ineq_loss_track = out_dict['inequality'].mean().item()
+            # 注释掉不等式损失，只使用数据损失
             loss += ineq_loss.mean()
 
         opt_loss_track = 0.
-        if return_optimizer:
+        if return_optimizer and ('optimizer' in out_dict):
             # add optimization log-likelihood, i.e., log p(c=c_min|x_0_pred(x_0)) (where p is Expon. distribution)
             opt_log_likelihood = -1. * out_dict['optimizer']
             opt_loss = -1. * lambda_opt * opt_log_likelihood
             opt_loss_track = out_dict['optimizer'].mean().item()
+            # 注释掉优化损失，只使用数据损失
             loss += opt_loss.mean()
+        elif return_optimizer and ('optimizer' not in out_dict):
+            # Graceful fallback: residual implementation didn't provide optimizer term.
+            opt_loss_track = 0.
 
-        return loss, data_loss_track, residual_loss_track, ineq_loss_track, opt_loss_track
+        # 计算投影头物理损失
+        projection_loss_track = 0.
+        if use_projection_heads and c_projection > 0. and projections:
+            projection_losses_nll = []  # 训练用（NLL）
+            projection_losses_abs = []  # 日志口径（|r| 均值）
+            
+            for pos_name, proj_output in projections.items():
+                # 将投影输出转换为适合residual计算的格式
+                if len(proj_output.shape) == 4:  # 图像格式 [B, C, H, W]
+                    proj_input_reshaped = image_to_b_xy_c(proj_output)
+                elif len(proj_output.shape) == 5:  # 视频格式 [B, C, F, H, W]  
+                    proj_input_reshaped = generalized_image_to_b_xy_c(proj_output)
+                else:
+                    continue  # 跳过不支持的格式
+                
+                # 准备投影头的residual计算输入
+                proj_model_input = (proj_input_reshaped, t)
+                
+                if residual_func.gov_eqs in ('darcy', 'charge', 'turbulent'):
+                    proj_residual_input = (proj_model_input, )
+                elif residual_func.gov_eqs == 'mechanics':
+                    proj_residual_input = (proj_model_input, bcs, vf, x_0)
+                else:
+                    continue
+                
+                # 计算投影头的物理残差（不需要模型输出，只要残差）
+                try:
+                    proj_residual_dict = residual_func.compute_residual(
+                        proj_residual_input,
+                        reduce='per-batch',
+                        return_model_out = False,  # 不需要模型输出
+                        return_optimizer = False,
+                        return_inequality = False,
+                        ddim_func = self.ddim_sample_x0,
+                        skip_model_call = True,  # 跳过模型调用，直接用给定的输出
+                        given_model_output = proj_input_reshaped
+                    )
+                    proj_residual = proj_residual_dict['residual']
+                    
+                    # 训练项：NLL
+                    var = extract(self.diff_dict['posterior_variance_clipped'], t, proj_residual)
+                    proj_residual_log_likelihood = self.gaussian_log_likelihood(
+                        torch.zeros_like(proj_residual), means=proj_residual, variance=var
+                    )
+                    proj_loss_nll = -1. * proj_residual_log_likelihood.mean()
+                    projection_losses_nll.append(proj_loss_nll)
+
+                    # 日志项：|residual| 均值（与 residual_loss_track 口径一致）
+                    proj_loss_abs = proj_residual.abs().mean()
+                    projection_losses_abs.append(proj_loss_abs)
+                    
+                except Exception as e:
+                    print(f"警告: 投影头 {pos_name} 物理损失计算失败: {e}")
+                    continue
+            
+            if projection_losses_nll:
+                total_projection_loss_nll = torch.stack(projection_losses_nll).mean()
+                loss += c_projection * total_projection_loss_nll
+
+            if projection_losses_abs:
+                total_projection_loss_abs = torch.stack(projection_losses_abs).mean()
+                projection_loss_track = total_projection_loss_abs.item()
+
+        return loss, data_loss_track, residual_loss_track, ineq_loss_track, opt_loss_track, projection_loss_track
     
     def ddim_sample_x0(self, xt, t, model, shape, reduced_n_steps, ddim_sampling_eta, gov_eqs = None, self_cond = None):
 
