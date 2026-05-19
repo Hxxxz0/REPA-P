@@ -11,7 +11,10 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 import imageio
 from einops import reduce, rearrange
+<<<<<<< HEAD
 from src_pr.residuals_mechanics_K import *
+=======
+>>>>>>> 18aea1e (Fix REPA-P training and evaluation workflow)
 from src_pr.unet_new import generalized_image_to_b_xy_c, generalized_b_xy_c_to_image
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -280,7 +283,11 @@ def image_array_to_gif(image_array, output_file, frame_duration=0.05, normalizat
                 frame = (frame * 255).astype(np.uint8)
             writer.append_data(frame)
 
+<<<<<<< HEAD
 def save_model(config, model, train_iterations, output_save_dir):
+=======
+def save_model(config, model, train_iterations, output_save_dir, optimizer=None, ema=None):
+>>>>>>> 18aea1e (Fix REPA-P training and evaluation workflow)
 
     os.makedirs(Path(output_save_dir, 'model/'), exist_ok=True)
 
@@ -291,23 +298,52 @@ def save_model(config, model, train_iterations, output_save_dir):
     save_obj = dict(
         model = model.state_dict()
     )
+<<<<<<< HEAD
+=======
+    if optimizer is not None:
+        save_obj['optimizer'] = optimizer.state_dict()
+    if ema is not None:
+        save_obj['ema'] = ema.state_dict()
+>>>>>>> 18aea1e (Fix REPA-P training and evaluation workflow)
     # save model to path
     with open(save_dir_model, 'wb') as f:
         torch.save(save_obj, f)
     print(f'\ncheckpoint saved to {output_save_dir}/.')
 
+<<<<<<< HEAD
 def load_model(path, model, strict = True):
 
     with open(path, 'rb') as f:
         loaded_obj = torch.load(f, map_location='cpu')
     try:
         missing, unexpected = model.load_state_dict(loaded_obj['model'], strict=strict)
+=======
+def load_model(path, model, optimizer=None, ema=None, strict = True, use_ema = False):
+
+    with open(path, 'rb') as f:
+        loaded_obj = torch.load(f, map_location='cpu')
+    state_key = 'ema' if use_ema and 'ema' in loaded_obj else 'model'
+    if use_ema and state_key != 'ema':
+        print(f'\nEMA weights requested but not found in {path}; loading model weights.')
+    try:
+        missing, unexpected = model.load_state_dict(loaded_obj[state_key], strict=strict)
+>>>>>>> 18aea1e (Fix REPA-P training and evaluation workflow)
     except (KeyError, RuntimeError) as e:
         raise RuntimeError(f'Failed to load checkpoint from {path}: {e}') from e
 
     if not strict:
         print(f'Missing keys: {missing}')
         print(f'Unexpected keys: {unexpected}')
+<<<<<<< HEAD
+=======
+    if optimizer is not None and 'optimizer' in loaded_obj:
+        optimizer.load_state_dict(loaded_obj['optimizer'])
+    if ema is not None:
+        if 'ema' in loaded_obj:
+            ema.load_state_dict(loaded_obj['ema'])
+        else:
+            ema.register(model)
+>>>>>>> 18aea1e (Fix REPA-P training and evaluation workflow)
     print('\nCheckpoint loaded from {}'.format(path))
 
     return model
@@ -745,8 +781,17 @@ class DenoisingDiffusion(nn.Module):
             vf = conditioning[:,0,0,0]
             residual_input = (model_input, bcs, vf, x_0)
 
+<<<<<<< HEAD
         # Request projection-head outputs when enabled.
         if use_projection_heads and hasattr(residual_func.model, 'use_projection_heads') and residual_func.model.use_projection_heads:
+=======
+        projection_loss_required = bool(use_projection_heads and c_projection > 0.)
+        if use_projection_heads and not getattr(residual_func.model, 'use_projection_heads', False):
+            raise RuntimeError('use_projection_heads=True, but the residual model was built without projection heads.')
+
+        # Request projection-head outputs when enabled.
+        if use_projection_heads:
+>>>>>>> 18aea1e (Fix REPA-P training and evaluation workflow)
             # Model call with projection outputs.
             out_dict = residual_func.compute_residual(residual_input,
                                                       reduce='per-batch', 
@@ -757,6 +802,13 @@ class DenoisingDiffusion(nn.Module):
                                                       return_projections = True)
             residual, output = out_dict['residual'], out_dict['model_out']
             projections = out_dict.get('projections', {})
+<<<<<<< HEAD
+=======
+            if projection_loss_required and not projections:
+                raise RuntimeError(
+                    'Projection heads are enabled with c_projection > 0, but no projection outputs were returned.'
+                )
+>>>>>>> 18aea1e (Fix REPA-P training and evaluation workflow)
         else:
             # Standard model call.
             out_dict = residual_func.compute_residual(residual_input,
@@ -818,7 +870,11 @@ class DenoisingDiffusion(nn.Module):
 
         # Projection-head physics loss.
         projection_loss_track = 0.
+<<<<<<< HEAD
         if use_projection_heads and c_projection > 0. and projections:
+=======
+        if projection_loss_required:
+>>>>>>> 18aea1e (Fix REPA-P training and evaluation workflow)
             projection_losses_nll = []  # training objective
             projection_losses_abs = []  # logging metric
             
@@ -829,7 +885,13 @@ class DenoisingDiffusion(nn.Module):
                 elif len(proj_output.shape) == 5:  # video format [B, C, F, H, W]  
                     proj_input_reshaped = generalized_image_to_b_xy_c(proj_output)
                 else:
+<<<<<<< HEAD
                     continue  # unsupported format
+=======
+                    raise RuntimeError(
+                        f'Projection output "{pos_name}" has unsupported shape {tuple(proj_output.shape)}.'
+                    )
+>>>>>>> 18aea1e (Fix REPA-P training and evaluation workflow)
                 
                 # Build residual inputs for projection-head outputs.
                 proj_model_input = (proj_input_reshaped, t)
@@ -839,6 +901,7 @@ class DenoisingDiffusion(nn.Module):
                 elif residual_func.gov_eqs == 'mechanics':
                     proj_residual_input = (proj_model_input, bcs, vf, x_0)
                 else:
+<<<<<<< HEAD
                     continue
                 
                 # Compute residuals directly on projection-head outputs.
@@ -874,6 +937,41 @@ class DenoisingDiffusion(nn.Module):
             if projection_losses_nll:
                 total_projection_loss_nll = torch.stack(projection_losses_nll).mean()
                 loss += c_projection * total_projection_loss_nll
+=======
+                    raise RuntimeError(f'Projection loss is not implemented for gov_eqs={residual_func.gov_eqs}.')
+                
+                # Compute residuals directly on projection-head outputs. This must succeed
+                # when REPA-P is enabled; otherwise training would silently become PIDM.
+                proj_residual_dict = residual_func.compute_residual(
+                    proj_residual_input,
+                    reduce='per-batch',
+                    return_model_out = False,
+                    return_optimizer = False,
+                    return_inequality = False,
+                    ddim_func = self.ddim_sample_x0,
+                    skip_model_call = True,
+                    given_model_output = proj_input_reshaped
+                )
+                proj_residual = proj_residual_dict['residual']
+                
+                # Training term: NLL.
+                var = extract(self.diff_dict['posterior_variance_clipped'], t, proj_residual)
+                proj_residual_log_likelihood = self.gaussian_log_likelihood(
+                    torch.zeros_like(proj_residual), means=proj_residual, variance=var
+                )
+                proj_loss_nll = -1. * proj_residual_log_likelihood.mean()
+                projection_losses_nll.append(proj_loss_nll)
+
+                # Logging term: mean absolute residual.
+                proj_loss_abs = proj_residual.abs().mean()
+                projection_losses_abs.append(proj_loss_abs)
+            
+            if not projection_losses_nll:
+                raise RuntimeError('Projection heads are enabled with c_projection > 0, but no projection loss was computed.')
+
+            total_projection_loss_nll = torch.stack(projection_losses_nll).mean()
+            loss += c_projection * total_projection_loss_nll
+>>>>>>> 18aea1e (Fix REPA-P training and evaluation workflow)
 
             if projection_losses_abs:
                 total_projection_loss_abs = torch.stack(projection_losses_abs).mean()

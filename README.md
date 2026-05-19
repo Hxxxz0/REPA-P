@@ -14,8 +14,13 @@ This repository contains the U-Net implementation used in our REPA-P experiments
 
 ### 🌟 Highlights
 
+<<<<<<< HEAD
 - 🔬 **Physics-informed diffusion**: train diffusion models with PDE residual guidance.
 - 🧠 **REPA-P**: add projection heads to align intermediate representations with physical constraints.
+=======
+- 🔬 **Physics-informed diffusion**: train diffusion models with physics residual or physics-inspired guidance.
+- 🧠 **REPA-P**: add projection heads to align intermediate representations with physical constraints. When projection heads are enabled, `c_projection` must be positive and the projection loss must be computed successfully.
+>>>>>>> 18aea1e (Fix REPA-P training and evaluation workflow)
 - 🧱 **PIDM baseline included**: switch between PIDM and REPA-P from the same YAML file.
 - 🌀 **Three benchmark systems**: Darcy flow, mechanics, and turbulent flow.
 - 🛠️ **U-Net only**: clean release version without DiT code, datasets, or checkpoints.
@@ -43,10 +48,18 @@ We provide two main scripts:
 python main.py --config model.yaml --gpu XXX
 ```
 
+<<<<<<< HEAD
 `sample.py` evaluates trained models. It reads the saved `model.yaml` from the checkpoint folder, so the same script works for both PIDM and REPA-P:
 
 ```bash
 python sample.py --name darcy.repap.unet --gpu XXX
+=======
+`sample.py` evaluates trained models. By default it runs validation reconstruction at `t=0`. Use `--mode generative` for true reverse-diffusion sampling from noise. It reads the saved `model.yaml` from the checkpoint folder, so the same script works for both PIDM and REPA-P:
+
+```bash
+python sample.py --name darcy.repap.unet --gpu XXX
+python sample.py --name darcy.repap.unet --gpu XXX --mode generative --num-samples 20 --use-ema
+>>>>>>> 18aea1e (Fix REPA-P training and evaluation workflow)
 ```
 
 ## 📁 Data
@@ -129,6 +142,11 @@ The expected array layout is:
 [T, X, Y, C] = [10000, 128, 48, 1]
 ```
 
+<<<<<<< HEAD
+=======
+The training code resizes this field to `pixels_per_dim x pixels_per_dim` (default `64x64`) for the U-Net path. This branch does not use a closed PDE residual because the released data contains only one velocity-fluctuation component on a 2D slice. Its residual term is a physics-inspired combination of bottom-wall no-slip and smoothness/gradient regularizers.
+
+>>>>>>> 18aea1e (Fix REPA-P training and evaluation workflow)
 Then set:
 
 ```yaml
@@ -156,6 +174,11 @@ projection_hidden_dim: 0
 c_projection: 0.0
 ```
 
+<<<<<<< HEAD
+=======
+You can also start from `configs/model.pidm.yaml`.
+
+>>>>>>> 18aea1e (Fix REPA-P training and evaluation workflow)
 ### 🔥 Or choose REPA-P
 
 ```yaml
@@ -167,6 +190,11 @@ projection_hidden_dim: 128
 c_projection: 0.01
 ```
 
+<<<<<<< HEAD
+=======
+You can also start from `configs/model.repap.yaml`. If `use_projection_heads: True`, training now validates that `projection_positions` is non-empty and `c_projection > 0`; projection residual failures stop training instead of silently disabling the REPA-P loss.
+
+>>>>>>> 18aea1e (Fix REPA-P training and evaluation workflow)
 ### 🏃 Train
 
 ```bash
@@ -211,18 +239,35 @@ turbulent_data_path: ./data/ch_2Dxysec.pickle
 
 ## 📊 Evaluation
 
+<<<<<<< HEAD
 🔍 Evaluate the latest checkpoint:
+=======
+🔍 Reconstruction evaluation on validation data at `t=0`:
+>>>>>>> 18aea1e (Fix REPA-P training and evaluation workflow)
 
 ```bash
 python sample.py --name darcy.repap.unet --gpu XXX
 ```
 
+<<<<<<< HEAD
 🎯 Evaluate a specific checkpoint:
+=======
+🎯 Reconstruction evaluation for a specific checkpoint:
+>>>>>>> 18aea1e (Fix REPA-P training and evaluation workflow)
 
 ```bash
 python sample.py --name darcy.repap.unet --step 150000 --gpu XXX --num-batches 4 --save-images
 ```
 
+<<<<<<< HEAD
+=======
+🎲 Generative reverse-diffusion sampling from noise:
+
+```bash
+python sample.py --name darcy.repap.unet --step 150000 --gpu XXX --mode generative --num-samples 20 --use-ema --save-images
+```
+
+>>>>>>> 18aea1e (Fix REPA-P training and evaluation workflow)
 📁 Results are written to:
 
 ```text
@@ -237,6 +282,10 @@ Install dependencies with:
 pip install -r requirements.txt
 ```
 
+<<<<<<< HEAD
 Main packages include `torch`, `numpy`, `pandas`, `matplotlib`, `tqdm`, `einops`, `torchvision`, `findiff`, `solidspy`, `scikit-image`, `pyyaml`, and `imageio`.
+=======
+Main packages include `torch`, `numpy`, `pandas`, `matplotlib`, `tqdm`, `einops`, `torchvision`, `findiff`, `solidspy`, `scikit-image`, `pyyaml`, `imageio`, `opencv-python`, `scipy`, `scikit-learn`, `dill`, and optional `wandb`.
+>>>>>>> 18aea1e (Fix REPA-P training and evaluation workflow)
 
 
