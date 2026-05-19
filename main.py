@@ -52,8 +52,6 @@ def normalize_positions(value):
         raise ValueError(f'Unknown projection_positions: {unknown}. Valid values: {sorted(valid_positions)}')
     return positions
 
-<<<<<<< HEAD
-=======
 
 def validate_config(config, projection_positions):
     gov_eqs = config.get('gov_eqs')
@@ -77,7 +75,6 @@ def validate_config(config, projection_positions):
         if c_projection <= 0.0:
             raise ValueError('use_projection_heads=True requires c_projection > 0 so projection loss participates.')
 
->>>>>>> 18aea1e (Fix REPA-P training and evaluation workflow)
 # Command-line arguments
 parser = argparse.ArgumentParser(description='Train diffusion models.')
 parser.add_argument('--gpu', '-g', type=int, default=None, 
@@ -114,11 +111,8 @@ if config['x0_estimation'] == 'mean':
     use_ddim_x0 = False
 elif config['x0_estimation'] == 'sample':
     use_ddim_x0 = True
-<<<<<<< HEAD
-=======
 else:
     raise ValueError("x0_estimation must be either 'mean' or 'sample'.")
->>>>>>> 18aea1e (Fix REPA-P training and evaluation workflow)
 ddim_steps = config['ddim_steps']
 residual_grad_guidance = config['residual_grad_guidance'] # gradient guidance scale as in https://www.sciencedirect.com/science/article/pii/S0021999123000670
 # residual corrections (can be changed after training since only affects inference) similar to https://arxiv.org/abs/2312.10527
@@ -138,39 +132,23 @@ use_dynamic_threshold = False
 self_condition = False
 
 # Projection-head parameters
-<<<<<<< HEAD
-use_projection_heads = config.get('use_projection_heads', False)
-projection_positions = normalize_positions(config.get('projection_positions', ['encoder', 'bottleneck', 'decoder']))
-projection_hidden_dim = config.get('projection_hidden_dim', 64)
-c_projection = config.get('c_projection', 0.0)
-=======
 use_projection_heads = bool(config.get('use_projection_heads', False))
 projection_positions = normalize_positions(config.get('projection_positions', ['encoder', 'bottleneck', 'decoder']))
 validate_config(config, projection_positions)
 projection_hidden_dim = int(config.get('projection_hidden_dim', 64) or 0)
 c_projection = float(config.get('c_projection', 0.0))
->>>>>>> 18aea1e (Fix REPA-P training and evaluation workflow)
 
 # Evaluation parameters, optionally overridden by YAML.
 test_eval_freq = int(config.get('test_eval_freq', 500))
 sample_freq = int(config.get('sample_freq', 500))
 # Save a model checkpoint every N iterations.
 checkpoint_save_freq = int(config.get('checkpoint_save_freq', 500))
-<<<<<<< HEAD
-full_sample_freq = 100000
-ema_start = 1000
-ema = EMA(0.99)
-topopt_eval = True # evaluate topopt metrics (only for mechanics as governing equations)
-use_double = False
-no_samples = 20
-=======
 ema_start = int(config.get('ema_start', 1000))
 use_ema_for_eval = bool(config.get('use_ema_for_eval', True))
 ema = EMA(0.99)
 topopt_eval = True # evaluate topopt metrics (only for mechanics as governing equations)
 use_double = False
 no_samples = int(config.get('no_samples', 20))
->>>>>>> 18aea1e (Fix REPA-P training and evaluation workflow)
 save_output = True
 eval_residuals = True
 create_gif = False
@@ -275,11 +253,7 @@ else:
 if use_double:
     torch.set_default_dtype(torch.float64)
 
-<<<<<<< HEAD
-dl = cycle(DataLoader(ds, batch_size = train_batch_size, shuffle=False))
-=======
 dl = cycle(DataLoader(ds, batch_size = train_batch_size, shuffle=True))
->>>>>>> 18aea1e (Fix REPA-P training and evaluation workflow)
 dl_valid = cycle(DataLoader(ds_valid, batch_size = train_batch_size, shuffle=False))
 
 # diffusion utils
@@ -316,12 +290,6 @@ elif gov_eqs == 'turbulent':
     ).to(device)
 else:
     raise ValueError('Unknown governing equations, cannot create model.')
-<<<<<<< HEAD
-if load_model_flag:
-    load_model(Path(load_path, 'model', 'checkpoint_' + str(load_model_step) + '.pt'), model)
-ema.register(model)
-=======
->>>>>>> 18aea1e (Fix REPA-P training and evaluation workflow)
 num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
 print(f'Number of trainable parameters: {num_params}')
 
@@ -351,8 +319,6 @@ else:
     raise ValueError('Unknown residuals mode.')
 
 optimizer = optim.Adam(model.parameters(), lr=1.e-4)
-<<<<<<< HEAD
-=======
 ema.register(model)
 if load_model_flag:
     load_model(
@@ -361,7 +327,6 @@ if load_model_flag:
         optimizer=optimizer,
         ema=ema,
     )
->>>>>>> 18aea1e (Fix REPA-P training and evaluation workflow)
 
 if wandb_track:
     import wandb
@@ -495,12 +460,9 @@ for iteration in pbar:
     # evaluation on validation set
     if iteration % test_eval_freq == 0 and exists(dl_valid):
         model.eval()
-<<<<<<< HEAD
-=======
         using_ema = use_ema_for_eval and iteration > ema_start
         if using_ema:
             ema.ema(model)
->>>>>>> 18aea1e (Fix REPA-P training and evaluation workflow)
         cur_test_batch = next(dl_valid).to(device)
         # NOTE: we do not use torch.no_grad() since we may require residual gradient for classifier-free guidance
         loss_test, data_loss_test, residual_loss_test, ineq_loss_test, opt_loss_test, projection_loss_test = diffusion_utils.model_estimation_loss(
@@ -544,29 +506,12 @@ for iteration in pbar:
             log_fn({'loss_optimization_test': opt_loss_test}, step=iteration)
         if use_projection_heads and c_projection > 0:
             log_fn({'loss_projection_test': projection_loss_test}, step=iteration)
-<<<<<<< HEAD
-=======
         if using_ema:
             ema.restore(model)
->>>>>>> 18aea1e (Fix REPA-P training and evaluation workflow)
         model.train()
 
      # generate and evaluate samples
     if ((iteration % sample_freq == 0) or (iteration == train_iterations)):        
-<<<<<<< HEAD
-        if gov_eqs == 'darcy':
-            conditioning_input = None
-            sample_shape = (no_samples, output_dim, pixels_per_dim, pixels_per_dim)
-        elif gov_eqs == 'turbulent':
-            conditioning_input = None
-            sample_shape = (no_samples, output_dim, pixels_per_dim, pixels_per_dim)
-        elif gov_eqs == 'mechanics':
-            cur_batch = next(dl_valid).to(device)
-            if cur_batch.shape[0] < no_samples:
-                no_samples = cur_batch.shape[0] # reduce no_samples to batch size
-            sample_shape = (no_samples, output_dim, pixels_per_dim+1, pixels_per_dim+1)
-            cur_batch = cur_batch[torch.randperm(cur_batch.shape[0], device = device)[:no_samples]]
-=======
         using_ema = use_ema_for_eval and iteration > ema_start
         if using_ema:
             ema.ema(model)
@@ -584,16 +529,11 @@ for iteration in pbar:
             n_samples_this_step = min(no_samples, cur_batch.shape[0])
             sample_shape = (n_samples_this_step, output_dim, pixels_per_dim+1, pixels_per_dim+1)
             cur_batch = cur_batch[torch.randperm(cur_batch.shape[0], device = device)[:n_samples_this_step]]
->>>>>>> 18aea1e (Fix REPA-P training and evaluation workflow)
             conditioning, x_0, bcs = torch.tensor_split(cur_batch, (3, 6), dim=1)
             conditioning_input = (conditioning, bcs, x_0)            
             # save conditioning data for later evaluation
             cond_data = torch.cat((conditioning, x_0, bcs), dim=1)
-<<<<<<< HEAD
-            for cur_sample in range(no_samples):
-=======
             for cur_sample in range(n_samples_this_step):
->>>>>>> 18aea1e (Fix REPA-P training and evaluation workflow)
                 for channel_idx in range(cond_data.shape[1]):
                     os.makedirs(output_save_dir + f'/training/step_{iteration}/sample_{cur_sample}', exist_ok=True)
                     np.savetxt(output_save_dir + f'/training/step_{iteration}/sample_{cur_sample}/cond_channel_{channel_idx}.csv', cond_data[cur_sample, channel_idx].detach().cpu().numpy(), delimiter=',')
@@ -676,11 +616,7 @@ for iteration in pbar:
             # logging
             log_fn({'residual_mean_abs_samples': np.nanmean(residuals_array)}, step=iteration)
             log_fn({'residual_median_abs_samples': np.nanmedian(residuals_array)}, step=iteration)
-<<<<<<< HEAD
-            df_data = {'Sample Index': list(range(no_samples)) + ['Mean'],
-=======
             df_data = {'Sample Index': list(range(n_samples_this_step)) + ['Mean'],
->>>>>>> 18aea1e (Fix REPA-P training and evaluation workflow)
                     'Residuals (abs)': list(residuals_array)}
             if return_inequality:
                 df_data['Inequality'] = list(ineq_array)
@@ -707,34 +643,21 @@ for iteration in pbar:
             log_fn({'rel_vf_error': np.nanmean(output[1]['vf_error_full_batch'].detach().cpu().numpy())}, step=iteration)
             log_fn({'fm_error': np.nanmean(output[1]['fm_error_full_batch'].detach().cpu().numpy())}, step=iteration)
 
-<<<<<<< HEAD
-        if iteration > 0:
-            save_model(config, model, iteration, output_save_dir)
-=======
         if using_ema:
             ema.restore(model)
 
         if iteration > 0:
             save_model(config, model, iteration, output_save_dir, optimizer=optimizer, ema=ema)
->>>>>>> 18aea1e (Fix REPA-P training and evaluation workflow)
 
     # ema.restore(residuals.model)
 
     # Save periodic checkpoints.
     if iteration > 0 and checkpoint_save_freq > 0 and iteration % checkpoint_save_freq == 0:
-<<<<<<< HEAD
-        save_model(config, model, iteration, output_save_dir)
-        print(f'Model saved at iteration {iteration} to {output_save_dir} (every {checkpoint_save_freq} steps)')
-
-# Save the final model.
-save_model(config, model, train_iterations, output_save_dir)
-=======
         save_model(config, model, iteration, output_save_dir, optimizer=optimizer, ema=ema)
         print(f'Model saved at iteration {iteration} to {output_save_dir} (every {checkpoint_save_freq} steps)')
 
 # Save the final model.
 save_model(config, model, train_iterations, output_save_dir, optimizer=optimizer, ema=ema)
->>>>>>> 18aea1e (Fix REPA-P training and evaluation workflow)
 print(f'Final model saved to {output_save_dir}')
 
 if wandb_track:

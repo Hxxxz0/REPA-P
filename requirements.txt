@@ -12,9 +12,6 @@ scikit-image
 pyyaml
 imageio
 wandb
-<<<<<<< HEAD
-=======
 scipy
 scikit-learn
 dill
->>>>>>> 18aea1e (Fix REPA-P training and evaluation workflow)

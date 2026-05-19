@@ -44,8 +44,6 @@ def normalize_positions(value):
     return positions
 
 
-<<<<<<< HEAD
-=======
 def validate_config(config):
     gov_eqs = config.get('gov_eqs')
     if gov_eqs not in {'darcy', 'mechanics', 'turbulent'}:
@@ -58,7 +56,6 @@ def validate_config(config):
             raise ValueError('use_projection_heads=True requires at least one projection_positions entry.')
 
 
->>>>>>> 18aea1e (Fix REPA-P training and evaluation workflow)
 def resolve_checkpoint(load_path, step):
     model_dir = Path(load_path) / 'model'
     if step is not None:
@@ -144,11 +141,7 @@ def setup_task(config, use_double):
 
 def build_model(config, task, device):
     use_projection_heads = bool(config.get('use_projection_heads', False))
-<<<<<<< HEAD
-    projection_positions = normalize_positions(config.get('projection_positions', []))
-=======
     projection_positions = normalize_positions(config.get('projection_positions', ['encoder', 'bottleneck', 'decoder']))
->>>>>>> 18aea1e (Fix REPA-P training and evaluation workflow)
     projection_hidden_dim = int(config.get('projection_hidden_dim', 0) or 0)
     gov_eqs = task['gov_eqs']
 
@@ -237,8 +230,6 @@ def save_batch_images(out_dir, gt, pred, max_samples=4):
             plt.close(fig)
 
 
-<<<<<<< HEAD
-=======
 def save_generated_images(out_dir, samples, max_samples=4):
     out_dir.mkdir(parents=True, exist_ok=True)
     samples_np = samples.detach().cpu().numpy()
@@ -310,7 +301,6 @@ def run_generative_eval(args, task, residuals, diffusion_utils, dl_valid, output
     return float(np.nanmean(residual))
 
 
->>>>>>> 18aea1e (Fix REPA-P training and evaluation workflow)
 def main():
     parser = argparse.ArgumentParser(description='Evaluate a trained U-Net PIDM/REPA-P checkpoint.')
     parser.add_argument('--name', type=str, required=True, help='Run name under ./trained_models/')
@@ -318,13 +308,10 @@ def main():
     parser.add_argument('--gpu', '-g', type=int, default=None)
     parser.add_argument('--batch-size', type=int, default=None)
     parser.add_argument('--num-batches', type=int, default=1, help='Number of validation batches to evaluate.')
-<<<<<<< HEAD
-=======
     parser.add_argument('--mode', choices=('reconstruction', 'generative'), default='reconstruction',
                         help='reconstruction evaluates t=0 denoising on validation data; generative samples from noise.')
     parser.add_argument('--num-samples', type=int, default=20, help='Number of generated samples for --mode generative.')
     parser.add_argument('--use-ema', action='store_true', help='Load EMA weights from the checkpoint when available.')
->>>>>>> 18aea1e (Fix REPA-P training and evaluation workflow)
     parser.add_argument('--save-images', action='store_true', help='Save PNG/CSV examples for the first batch.')
     args = parser.parse_args()
 
@@ -337,10 +324,7 @@ def main():
 
     load_path = Path('./trained_models') / args.name
     config = yaml.safe_load((load_path / 'model' / 'model.yaml').read_text())
-<<<<<<< HEAD
-=======
     validate_config(config)
->>>>>>> 18aea1e (Fix REPA-P training and evaluation workflow)
     checkpoint_path, step = resolve_checkpoint(load_path, args.step)
     print(f'Run: {args.name}')
     print(f'gov_eqs: {config["gov_eqs"]}')
@@ -357,43 +341,13 @@ def main():
     ddim_steps = int(config.get('ddim_steps', 0))
     diffusion_utils = DenoisingDiffusion(int(config['diff_steps']), device, residual_grad_guidance)
     model = build_model(config, task, device)
-<<<<<<< HEAD
-    load_model(checkpoint_path, model)
-=======
     load_model(checkpoint_path, model, use_ema=args.use_ema)
->>>>>>> 18aea1e (Fix REPA-P training and evaluation workflow)
     model.eval()
 
     residuals = build_residuals(config, task, model, device, use_ddim_x0, ddim_steps, residual_grad_guidance)
     output_dir = load_path / 'evaluation' / f'step_{step}'
     output_dir.mkdir(parents=True, exist_ok=True)
 
-<<<<<<< HEAD
-    all_rows = []
-    residual_means = []
-    grad_context = torch.enable_grad if residual_grad_guidance else torch.no_grad
-    with grad_context():
-        for batch_idx, batch in enumerate(dl_valid):
-            if args.num_batches >= 0 and batch_idx >= args.num_batches:
-                break
-            gt, pred, residual = reconstruct_batch(batch, task, residuals, diffusion_utils, device)
-            rows = reconstruction_metrics(gt, pred)
-            for row in rows:
-                row['batch'] = batch_idx
-            all_rows.extend(rows)
-            residual_means.append(float(residual.abs().mean().cpu()))
-            if batch_idx == 0 and args.save_images:
-                save_batch_images(output_dir / 'examples', gt, pred)
-
-    pd.DataFrame(all_rows).to_csv(output_dir / 'reconstruction_metrics.csv', index=False)
-    summary = pd.DataFrame([{
-        'run_name': args.name,
-        'step': step,
-        'gov_eqs': config['gov_eqs'],
-        'use_projection_heads': bool(config.get('use_projection_heads', False)),
-        'projection_positions': ','.join(normalize_positions(config.get('projection_positions', []))),
-        'mean_abs_residual': float(np.mean(residual_means)) if residual_means else float('nan'),
-=======
     if args.mode == 'reconstruction':
         all_rows = []
         residual_means = []
@@ -425,7 +379,6 @@ def main():
         'projection_positions': ','.join(normalize_positions(config.get('projection_positions', ['encoder', 'bottleneck', 'decoder']))),
         'weights': 'ema' if args.use_ema else 'model',
         'mean_abs_residual': mean_abs_residual,
->>>>>>> 18aea1e (Fix REPA-P training and evaluation workflow)
     }])
     summary.to_csv(output_dir / 'summary.csv', index=False)
     print(summary.to_string(index=False))

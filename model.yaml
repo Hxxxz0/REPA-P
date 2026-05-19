@@ -32,22 +32,16 @@ checkpoint_save_freq: 1000
 sample_freq: 5000
 test_eval_freq: 1000
 log_freq: 20
-<<<<<<< HEAD
-=======
 no_samples: 20
 ema_start: 1000
 use_ema_for_eval: True
->>>>>>> 18aea1e (Fix REPA-P training and evaluation workflow)
 
 # Optional: record denoising-step physics residuals during sampling inside training.
 collect_physics_per_step: False
 
 # Turbulent-only options. Ignored by other datasets.
-<<<<<<< HEAD
-=======
 # The turbulent branch uses wall/smoothness regularizers on the resized field,
 # not a closed PDE residual.
->>>>>>> 18aea1e (Fix REPA-P training and evaluation workflow)
 pixels_per_dim: 64
 turbulent_data_path: ./data/ch_2Dxysec.pickle
 turbulent_train_fraction: 0.9
