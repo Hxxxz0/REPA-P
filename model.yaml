@@ -16,7 +16,8 @@ fd_acc: 2 # accuracy of finite difference evaluation, mainly relevant for 'darcy
 # Set use_projection_heads: False for the PIDM baseline.
 # Set use_projection_heads: True for REPA-P.
 use_projection_heads: True
-projection_positions: decoder # projection position: encoder, bottleneck, decoder, output
+projection_positions:
+  - decoder # projection position: encoder, bottleneck, decoder, output
 projection_hidden_dim: 128
 c_projection: 0.01 # projection-head physics loss weight
 

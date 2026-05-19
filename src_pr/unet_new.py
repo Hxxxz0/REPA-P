@@ -74,6 +74,22 @@ def is_list_str(x):
         return False
     return all([type(el) == str for el in x])
 
+def normalize_projection_positions(value):
+    if value is None:
+        positions = []
+    elif isinstance(value, str):
+        positions = [item.strip() for item in value.split(',') if item.strip()]
+    elif isinstance(value, (list, tuple)):
+        positions = list(value)
+    else:
+        raise TypeError('projection_positions must be a string, list, tuple, or null.')
+
+    valid_positions = {'encoder', 'bottleneck', 'decoder', 'output'}
+    unknown = sorted(set(positions) - valid_positions)
+    if unknown:
+        raise ValueError(f'Unknown projection_positions: {unknown}. Valid values: {sorted(valid_positions)}')
+    return positions
+
 # relative positional bias
 
 class RelativePositionBias(nn.Module):
@@ -476,7 +492,7 @@ class Unet3D(nn.Module):
         
         # Projection-head configuration
         self.use_projection_heads = use_projection_heads
-        self.projection_positions = projection_positions
+        self.projection_positions = normalize_projection_positions(projection_positions)
         self.projection_hidden_dim = projection_hidden_dim
 
         time_dim = dim * 4

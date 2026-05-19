@@ -9,8 +9,14 @@ import torch
 import yaml
 from torch.utils.data import DataLoader
 
-from src_pr.data_utils import *
-from src_pr.denoising_utils import *
+from src_pr import denoising_utils as denoising_utils_module
+from src_pr.data_utils import Dataset, DatasetTurbulentPickle, Dataset_Paths
+from src_pr.denoising_utils import (
+    DenoisingDiffusion,
+    b_xy_c_to_image,
+    image_to_b_xy_c,
+    load_model,
+)
 from src_pr.metrics import calculate_psnr, calculate_ssim
 from src_pr.residuals_darcy import ResidualsDarcy
 from src_pr.residuals_mechanics_K import ResidualsMechanics
@@ -22,11 +28,20 @@ os.chdir(script_dir)
 
 
 def normalize_positions(value):
-    if isinstance(value, str):
-        return [value]
-    if isinstance(value, (list, tuple)):
-        return list(value)
-    return []
+    if value is None:
+        positions = []
+    elif isinstance(value, str):
+        positions = [item.strip() for item in value.split(',') if item.strip()]
+    elif isinstance(value, (list, tuple)):
+        positions = list(value)
+    else:
+        raise TypeError('projection_positions must be a string, list, tuple, or null.')
+
+    valid_positions = {'encoder', 'bottleneck', 'decoder', 'output'}
+    unknown = sorted(set(positions) - valid_positions)
+    if unknown:
+        raise ValueError(f'Unknown projection_positions: {unknown}. Valid values: {sorted(valid_positions)}')
+    return positions
 
 
 def resolve_checkpoint(load_path, step):
@@ -215,10 +230,9 @@ def main():
 
     if args.gpu is not None:
         device = torch.device(f'cuda:{args.gpu}' if torch.cuda.is_available() else 'cpu')
-        import src_pr.denoising_utils as denoising_utils_module
-        denoising_utils_module.device = device
     else:
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    denoising_utils_module.device = device
     print(f'Using device: {device}')
 
     load_path = Path('./trained_models') / args.name
@@ -248,7 +262,8 @@ def main():
 
     all_rows = []
     residual_means = []
-    with torch.no_grad():
+    grad_context = torch.enable_grad if residual_grad_guidance else torch.no_grad
+    with grad_context():
         for batch_idx, batch in enumerate(dl_valid):
             if args.num_batches >= 0 and batch_idx >= args.num_batches:
                 break

@@ -36,7 +36,7 @@ def noop(*args, **kwargs):
 def plot_data(data):
     plt.figure(figsize=(16, 12))
     plt.scatter(*data, s=10)
-    plt.title('Ground truth $q(\mathbf{x}_{0})$')
+    plt.title(r'Ground truth $q(\mathbf{x}_{0})$')
     plt.show()
     exit()
 
@@ -163,7 +163,7 @@ def plot_diffusion(dataset, alphas_bar_sqrt, one_minus_alphas_bar_sqrt):
     for i in range(10):
         q_i = q_sample(dataset, torch.tensor([i * 10]), alphas_bar_sqrt, one_minus_alphas_bar_sqrt)
         axs[i].scatter(q_i[:, 0], q_i[:, 1], s=10)
-        axs[i].set_axis_off(); axs[i].set_title('$q(\mathbf{x}_{'+str(i*10)+'})$', fontsize=10)
+        axs[i].set_axis_off(); axs[i].set_title(r'$q(\mathbf{x}_{'+str(i*10)+'})$', fontsize=10)
     plt.show()
 
 class ConditionalLinear(nn.Module):
@@ -560,16 +560,18 @@ def save_model(model, name, diff_dict, step, n_steps, dim, model_pred_mode, resi
 
 def load_model(path, strict = True):
 
-    # to avoid extra GPU memory usage in main process when using Accelerate
     with open(path, 'rb') as f:
         loaded_obj = torch.load(f, map_location='cpu')
 
     model = ConditionalModel(loaded_obj['dim'], loaded_obj['n_steps'])
 
     try:
-        model.load_state_dict(loaded_obj['model'], strict = strict)
-    except RuntimeError:
-        print('Failed loading state dict.')
+        missing, unexpected = model.load_state_dict(loaded_obj['model'], strict=strict)
+    except (KeyError, RuntimeError) as e:
+        raise RuntimeError(f'Failed to load checkpoint from {path}: {e}') from e
+    if not strict:
+        print(f'Missing keys: {missing}')
+        print(f'Unexpected keys: {unexpected}')
         
     try:
         with open(path.replace('.pt', '_residual_func.pkl'), 'rb') as f:
@@ -602,7 +604,7 @@ def array_to_gif(data, output_save_dir, x_lim, y_lim, label = None, duration = 0
             ax.set_ylim(y_lim)
             if label is not None:
                 if label == 'sampled':
-                    ax.set_title('$p(\mathbf{x}_{' + str(len(data)-step-1)+'})$')
+                    ax.set_title(r'$p(\mathbf{x}_{' + str(len(data)-step-1)+'})$')
                 elif label == 'pred':
                     ax.set_title('Model pred. step ' + str(len(data)-step-1))
                 else:

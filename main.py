@@ -15,15 +15,42 @@ import pandas as pd
 script_dir = Path(__file__).parent.absolute()
 os.chdir(script_dir)
 
-from src_pr.data_utils import *
-from src_pr.data_utils import DatasetTurbulentPickle
+from src_pr.data_utils import Dataset, Dataset_Paths, DatasetTurbulentPickle, cycle
 from torch.utils.data import DataLoader
-from src_pr.denoising_utils import *
+from src_pr import denoising_utils as denoising_utils_module
+from src_pr.denoising_utils import (
+    DenoisingDiffusion,
+    EMA,
+    b_xy_c_to_image,
+    exists,
+    image_array_to_gif,
+    image_to_b_xy_c,
+    load_model,
+    noop,
+    save_model,
+)
 from src_pr.metrics import calculate_psnr, calculate_ssim
 from src_pr.unet_new import Unet3D
 from src_pr.residuals_darcy import ResidualsDarcy
 from src_pr.residuals_mechanics_K import ResidualsMechanics
 from src_pr.residuals_turbulent import ResidualsTurbulent
+
+
+def normalize_positions(value):
+    if value is None:
+        positions = []
+    elif isinstance(value, str):
+        positions = [item.strip() for item in value.split(',') if item.strip()]
+    elif isinstance(value, (list, tuple)):
+        positions = list(value)
+    else:
+        raise TypeError('projection_positions must be a string, list, tuple, or null.')
+
+    valid_positions = {'encoder', 'bottleneck', 'decoder', 'output'}
+    unknown = sorted(set(positions) - valid_positions)
+    if unknown:
+        raise ValueError(f'Unknown projection_positions: {unknown}. Valid values: {sorted(valid_positions)}')
+    return positions
 
 # Command-line arguments
 parser = argparse.ArgumentParser(description='Train diffusion models.')
@@ -36,12 +63,11 @@ args = parser.parse_args()
 # Device setup
 if args.gpu is not None:
     device = torch.device(f'cuda:{args.gpu}' if torch.cuda.is_available() else 'cpu')
-    # Keep the diffusion utilities on the selected device.
-    import src_pr.denoising_utils as denoising_utils_module
-    denoising_utils_module.device = device
     print(f'Using specified device: {device}')
 else:
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f'Using default device: {device}')
+denoising_utils_module.device = device
 
 config_path = Path(args.config)
 if not config_path.exists():
@@ -82,7 +108,7 @@ self_condition = False
 
 # Projection-head parameters
 use_projection_heads = config.get('use_projection_heads', False)
-projection_positions = config.get('projection_positions', ['encoder', 'bottleneck', 'decoder'])
+projection_positions = normalize_positions(config.get('projection_positions', ['encoder', 'bottleneck', 'decoder']))
 projection_hidden_dim = config.get('projection_hidden_dim', 64)
 c_projection = config.get('c_projection', 0.0)
 
@@ -396,8 +422,6 @@ for iteration in pbar:
                 _w.writeheader()
             _w.writerow(_tm_row)
     
-    # Progress-bar update
-    pbar.update(1)
     # ema update
     if iteration > ema_start:
         ema.update(model)
@@ -412,7 +436,8 @@ for iteration in pbar:
                     c_ineq = c_ineq, lambda_opt = lambda_opt, use_projection_heads = use_projection_heads, 
                     c_projection = c_projection)
 
-        with torch.no_grad():
+        grad_context = torch.enable_grad if residual_grad_guidance else torch.no_grad
+        with grad_context():
             gt_eval, pred_eval = reconstruct_validation_batch(cur_test_batch)
         metric_rows, metric_means = compute_reconstruction_metrics(gt_eval, pred_eval)
         output_save_dir_step = output_save_dir + f'/training/step_{iteration}/'
@@ -513,7 +538,11 @@ for iteration in pbar:
             for sel_sample in sel_samples:
                 for sel_channel in channels:
                     last_pred = last_preds[sel_sample, sel_channel]
-                    last_pred_normalized = (last_pred - last_pred.min()) / (last_pred.max() - last_pred.min()) # normalize to [0,1]
+                    denom = last_pred.max() - last_pred.min()
+                    if denom < 1e-12:
+                        last_pred_normalized = np.zeros_like(last_pred)
+                    else:
+                        last_pred_normalized = (last_pred - last_pred.min()) / denom
 
                     image = np.uint8(last_pred_normalized * 255)
                     fig, ax = plt.subplots()
