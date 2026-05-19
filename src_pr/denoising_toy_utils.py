@@ -423,7 +423,7 @@ def loss_variational(output, x_0, x_t, t, diff_dict, base_2 = False):
         log_likelihood = log_likelihood / np.log(2.)
 
     # At the first timestep return the log likelihood, otherwise return KL(q(x_{t-1}|x_t,x_0) || p(x_{t-1}|x_t))
-    # BUG (imo) nan/inf values in tensor that is not considered in torch.where() still affects gradients. Thus check for this before.
+        # Check invalid values before torch.where because inactive branches can still affect gradients.
     assert log_likelihood.isnan().any() == False, 'Log likelihood is nan.'
     assert log_likelihood.isinf().any() == False, 'Log likelihood is inf.'
 

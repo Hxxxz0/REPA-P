@@ -3,8 +3,8 @@ import torch
 from torch import nn, einsum
 from functools import partial
 from einops import rearrange
-from einops_exts import rearrange_many
-from rotary_embedding_torch import RotaryEmbedding
+from src_pr.einops_exts import rearrange_many
+from src_pr.rotary_embedding_torch import RotaryEmbedding
 import torch.nn.functional as F
 import numpy as np
 
@@ -406,10 +406,10 @@ class SignalEmbedding(nn.Module):
 
 class ProjectionHead3D(nn.Module):
     """
-    轻量通用投影头：
-    - 输入: 任意 [B, C_in, F?, H, W] 或 [B, C_in, H, W] (会自动升到 5D)
-    - 输出: 与主输出相同通道数 out_ch；分辨率会自动 resize 到主输出分辨率
-    - 设计: 可选 1 个中间宽度(1x1x1 conv + GN + SiLU)，再接 1x1x1 线性层到 out_ch
+    Lightweight projection head:
+    - Input: [B, C_in, F?, H, W] or [B, C_in, H, W] (promoted to 5D).
+    - Output: out_ch channels, resized to the target output resolution.
+    - Design: optional hidden 1x1x1 conv + GN + SiLU, followed by a 1x1x1 output layer.
     """
     def __init__(self, in_ch: int, out_ch: int, hidden: int = 0, groups: int = 8):
         super().__init__()
@@ -432,18 +432,18 @@ class ProjectionHead3D(nn.Module):
 
     def forward(self, feat, target_shape_5d):
         """
-        feat: tap 到的特征 (4D或5D)
-        target_shape_5d: 目标形状(5D) 用于对齐 F/H/W，例如来自 y_hat.unsqueeze(2).shape
+        feat: tapped feature map (4D or 5D).
+        target_shape_5d: target 5D shape used to align F/H/W.
         """
         x = self._to_5d(feat)
         B, C, F_t, H_t, W_t = x.shape
         _, _, F_o, H_o, W_o = target_shape_5d
 
-        # resize 到主输出的 F/H/W
+        # Resize to the target F/H/W.
         if (F_t, H_t, W_t) != (F_o, H_o, W_o):
             x = F.interpolate(x, size=(F_o, H_o, W_o), mode='trilinear', align_corners=False)
 
-        return self.net(x)  # 返回 [B, out_ch, F_o, H_o, W_o]
+        return self.net(x)  # [B, out_ch, F_o, H_o, W_o]
 
 class Unet3D(nn.Module):
     def __init__(
@@ -465,16 +465,16 @@ class Unet3D(nn.Module):
         cond_to_time = 'add',
         padding_mode = 'zeros',
         sigmoid_last_channel = False,
-        # 新增: 投影头配置
+        # Projection-head configuration
         use_projection_heads = False,
-        projection_positions = ['encoder', 'bottleneck', 'decoder'],  # 可选: 'encoder', 'bottleneck', 'decoder', 'output'
-        projection_hidden_dim = 0,  # 投影头的隐藏维度，0表示不使用隐藏层
+        projection_positions = ['encoder', 'bottleneck', 'decoder'],
+        projection_hidden_dim = 0,
     ):
         super().__init__()
         self.input_channels = channels * (2 if self_condition else 1)
         self.self_condition = self_condition
         
-        # 投影头配置
+        # Projection-head configuration
         self.use_projection_heads = use_projection_heads
         self.projection_positions = projection_positions
         self.projection_hidden_dim = projection_hidden_dim
@@ -578,21 +578,21 @@ class Unet3D(nn.Module):
 
         self.sigmoid_last_channel = sigmoid_last_channel
         
-        # 初始化投影头
+        # Initialize projection heads.
         self.projection_heads = nn.ModuleDict()
         if self.use_projection_heads:
             out_dim_proj = default(out_dim, channels)
             
-            # encoder 投影头 - 只在最后一个encoder block
+            # Encoder projection head from the last encoder block.
             if 'encoder' in self.projection_positions:
-                encoder_last_dim = dims[-1]  # 最后一个encoder输出维度
+                encoder_last_dim = dims[-1]
                 self.projection_heads['encoder'] = ProjectionHead3D(
                     in_ch=encoder_last_dim, 
                     out_ch=out_dim_proj, 
                     hidden=self.projection_hidden_dim
                 )
             
-            # bottleneck 投影头 - 从中间处理层获取特征
+            # Bottleneck projection head from the middle blocks.
             if 'bottleneck' in self.projection_positions:
                 self.projection_heads['bottleneck'] = ProjectionHead3D(
                     in_ch=mid_dim, 
@@ -600,16 +600,16 @@ class Unet3D(nn.Module):
                     hidden=self.projection_hidden_dim
                 )
             
-            # decoder 投影头 - 只在最后一个decoder block  
+            # Decoder projection head from the last decoder block.  
             if 'decoder' in self.projection_positions:
-                decoder_last_dim = dims[0]  # 第一个维度，即最后decoder输出维度
+                decoder_last_dim = dims[0]
                 self.projection_heads['decoder'] = ProjectionHead3D(
                     in_ch=decoder_last_dim, 
                     out_ch=out_dim_proj, 
                     hidden=self.projection_hidden_dim
                 )
             
-            # output 投影头 - 从最终输出获取特征
+            # Output projection head from the final output.
             if 'output' in self.projection_positions:
                 self.projection_heads['output'] = ProjectionHead3D(
                     in_ch=out_dim_proj, 
@@ -636,16 +636,16 @@ class Unet3D(nn.Module):
         x_self_cond = None,
         cond = None,
         null_cond_prob = 0.,
-        return_projections = False,  # 新增: 是否返回投影结果
+        return_projections = False,
     ):
         batch, device = x.shape[0], x.device
         
-        # 投影结果存储
+        # Projection output storage.
         projections = {} if return_projections and self.use_projection_heads else None
 
         # reshape x to video-like input (since this U-Net is designed for video)
         video_flag = False
-        original_input_shape = x.shape  # 保存原始输入形状用于计算目标形状
+        original_input_shape = x.shape
         if len(x.shape) == 3:            
             x = generalized_b_xy_c_to_image(x)
             x = x.unsqueeze(2)
@@ -656,13 +656,13 @@ class Unet3D(nn.Module):
         else:
             raise ValueError('Input must be image [BxCxPxP] or image sequence [BxCxFxPxP].')
         
-        # 计算最终输出的目标形状（用于投影头对齐）
+        # Target output shape used to align projection heads.
         if projections is not None:
             out_dim_actual = default(self.final_conv[-1].out_channels, len(original_input_shape) > 3 and original_input_shape[1] or 2)
             if video_flag:
                 target_output_shape = (batch, out_dim_actual, original_input_shape[2], original_input_shape[3], original_input_shape[4])
             else:
-                # 图像输入情况
+                # Image input.
                 if len(original_input_shape) == 4:
                     target_output_shape = (batch, out_dim_actual, 1, original_input_shape[2], original_input_shape[3])
                 else:  # len == 3
@@ -699,16 +699,16 @@ class Unet3D(nn.Module):
 
         h = []
 
-        # Encoder 路径
+        # Encoder path.
         for i, (block1, block2, spatial_attn, downsample) in enumerate(self.downs):
             x = block1(x, t)
             x = block2(x, t)
             x = spatial_attn(x)
             h.append(x)
             
-            # 只在最后一个encoder block进行tap
+            # Tap the last encoder block.
             if (projections is not None and 'encoder' in self.projection_heads and 
-                i == len(self.downs) - 1):  # 最后一个encoder
+                i == len(self.downs) - 1):
                 proj_result = self.projection_heads['encoder'](x, target_output_shape)
                 projections['encoder'] = proj_result.squeeze(2) if not video_flag else proj_result
             
@@ -718,21 +718,21 @@ class Unet3D(nn.Module):
         x = self.mid_spatial_attn(x)
         x = self.mid_block2(x, t)
         
-        # Bottleneck 投影头 tap
+        # Bottleneck projection tap.
         if projections is not None and 'bottleneck' in self.projection_heads:
             proj_result = self.projection_heads['bottleneck'](x, target_output_shape)
             projections['bottleneck'] = proj_result.squeeze(2) if not video_flag else proj_result
 
-        # Decoder 路径
+        # Decoder path.
         for i, (block1, block2, spatial_attn, upsample) in enumerate(self.ups):
             x = torch.cat((x, h.pop()), dim = 1)
             x = block1(x, t)
             x = block2(x, t)
             x = spatial_attn(x)
             
-            # 只在最后一个decoder block进行tap
+            # Tap the last decoder block.
             if (projections is not None and 'decoder' in self.projection_heads and 
-                i == len(self.ups) - 1):  # 最后一个decoder
+                i == len(self.ups) - 1):
                 proj_result = self.projection_heads['decoder'](x, target_output_shape)
                 projections['decoder'] = proj_result.squeeze(2) if not video_flag else proj_result
             
@@ -745,7 +745,7 @@ class Unet3D(nn.Module):
         if not video_flag:
             x = x.squeeze(2)
         
-        # Output 投影头 tap
+        # Output projection tap.
         if projections is not None and 'output' in self.projection_heads:
             x_for_proj = x.unsqueeze(2) if not video_flag else x
             projections['output'] = self.projection_heads['output'](x_for_proj, target_output_shape)
@@ -756,7 +756,7 @@ class Unet3D(nn.Module):
             # NOTE apply sigmoid on last channel of x to force E-field to be in [0,1]
             x[:, -1] = torch.sigmoid(x[:, -1])
 
-        # 返回结果
+        # Return outputs.
         if return_projections and self.use_projection_heads:
             return x, projections
         else:

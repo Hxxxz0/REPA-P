@@ -9,8 +9,6 @@ class ResidualsDarcy:
 
         :param model: The neural network model to compute the residuals for.
         :param n_steps: Number of steps for time discretization.
-        :param E: Young's Modulus.
-        :param nu: Poisson's Ratio.
         """
         self.gov_eqs = 'darcy'
         self.model = model
@@ -110,7 +108,7 @@ class ResidualsDarcy:
             x0_pred = input
             model_out = x0_pred
         elif skip_model_call and given_model_output is not None:
-            # 直接使用给定的模型输出，跳过模型调用
+            # Use the provided model output directly.
             x0_pred = given_model_output
             model_out = x0_pred
         else:
@@ -126,28 +124,28 @@ class ResidualsDarcy:
                     x0_pred = self.model.forward_with_guidance_scale(noisy_in, time, cond = dr_dx, guidance_scale = 3.) # There is no mentioning of value for the guidance scale in the paper and repo?!?
                     model_out = x0_pred
                 else:
-                    # residual guidance 情况下不返回投影，避免干扰guidance计算
+                    # Do not request projections during residual guidance.
                     x0_pred = self.model(noisy_in, time, cond = dr_dx, null_cond_prob = 0.1)
                     model_out = x0_pred
             else:
                 if self.use_ddim_x0:
                     x0_pred, model_out = ddim_func(noisy_in, time, self.model, noisy_in.shape,self.ddim_steps, 0.)
                 else:
-                    # 按需请求投影头输出（仅当模型支持且开启时）
+                    # Request projection outputs when supported and enabled.
                     call_kwargs = {}
                     if return_projections and hasattr(self.model, 'use_projection_heads') and getattr(self.model, 'use_projection_heads'):
                         call_kwargs['return_projections'] = True
                     x0_pred = self.model(noisy_in, time, **call_kwargs)
                     model_out = x0_pred
 
-        # 统一处理模型输出：可能是 (tensor, projections)
+        # Normalize model outputs, which may include projections.
         projections = None
         if isinstance(x0_pred, tuple):
             x0_pred, projections = x0_pred
         if isinstance(model_out, tuple):
             model_out = model_out[0]
 
-        # 支持直接传入 b_xy_c（例如来自投影头）的情况
+        # Support direct b_xy_c inputs such as projection-head outputs.
         if x0_pred.ndim == 3:
             x0_pred = generalized_b_xy_c_to_image(x0_pred)
 

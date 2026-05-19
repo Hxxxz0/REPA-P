@@ -9,8 +9,8 @@ residual_grad_guidance: False # gradient guidance as in https://www.sciencedirec
 correction_mode: xt # correct based on 'xt' or 'x0', CoCogen as presented in https://arxiv.org/abs/2312.10527 uses xt
 M_correction: 0 # correction steps after sampling x0, see https://arxiv.org/abs/2312.10527
 N_correction: 0 # correction steps before sampling x0, see https://arxiv.org/abs/2312.10527
-gov_eqs: darcy # governing equations: 'darcy', 'mechanics', 'charge', or 'turbulent'
-fd_acc: 2 # accuracy of finite difference evaluation, mainly relevant for 'darcy' and 'charge'
+gov_eqs: darcy # governing equations: 'darcy', 'mechanics', or 'turbulent'
+fd_acc: 2 # accuracy of finite difference evaluation, mainly relevant for 'darcy'
 
 # Projection-head configuration.
 # Set use_projection_heads: False for the PIDM baseline.

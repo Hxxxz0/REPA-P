@@ -4,6 +4,10 @@
 
 $~$
 
+## Overview
+
+![REPA-P overview](assets/repa_p_overview.png)
+
 ## Introduction & Setup
 
 This repository contains the U-Net implementation used in our REPA-P experiments, built on top of Physics-Informed Diffusion Models (PIDM).
@@ -20,13 +24,13 @@ We provide two main scripts:
 `main.py` trains the model. Change the dataset, run name, and projection-head switch in `model.yaml`, then run:
 
 ```bash
-python main.py --config model.yaml --gpu 0
+python main.py --config model.yaml --gpu XXX
 ```
 
 `sample.py` evaluates trained models. It reads the saved `model.yaml` from the checkpoint folder, so the same script works for both PIDM and REPA-P:
 
 ```bash
-python sample.py --name darcy.repap.unet --gpu 0
+python sample.py --name darcy.repap.unet --gpu XXX
 ```
 
 ## Data
@@ -121,15 +125,6 @@ lambda_opt: 0.1
 ```
 
 ```yaml
-# Charge
-gov_eqs: charge
-train_iterations: 150000
-train_batch_size: 64
-c_ineq: 0.0
-lambda_opt: 0.0
-```
-
-```yaml
 # Turbulent
 gov_eqs: turbulent
 train_iterations: 150000
@@ -167,10 +162,4 @@ pip install -r requirements.txt
 
 Main packages include `torch`, `numpy`, `pandas`, `matplotlib`, `tqdm`, `einops`, `torchvision`, `findiff`, `solidspy`, `scikit-image`, `pyyaml`, and `imageio`.
 
-## Notes
 
-This release is U-Net only. DiT code, datasets, checkpoints, logs, and generated images are intentionally excluded. Do not upload `data/` or `trained_models/` to arXiv.
-
-## Citation
-
-If this code is useful for your research, please cite PIDM and our accompanying paper.

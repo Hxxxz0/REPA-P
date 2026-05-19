@@ -11,41 +11,37 @@ import pandas as pd
 
 # =============================================================================
 
-# 设置工作目录为脚本所在目录，确保相对路径正确
+# Use paths relative to this script.
 script_dir = Path(__file__).parent.absolute()
 os.chdir(script_dir)
 
 from src_pr.data_utils import *
-from src_pr.data_utils import DatasetTurbulentPickle  # type: ignore[reportMissingImports]
+from src_pr.data_utils import DatasetTurbulentPickle
 from torch.utils.data import DataLoader
 from src_pr.denoising_utils import *
 from src_pr.metrics import calculate_psnr, calculate_ssim
 from src_pr.unet_new import Unet3D
 from src_pr.residuals_darcy import ResidualsDarcy
 from src_pr.residuals_mechanics_K import ResidualsMechanics
-from src_pr.residuals_turbulent import ResidualsTurbulent  # type: ignore[reportMissingImports]
-try:
-    from src_pr.residuals_charge import ResidualsCharge
-except ImportError:
-    ResidualsCharge = None
+from src_pr.residuals_turbulent import ResidualsTurbulent
 
-# 解析命令行参数
-parser = argparse.ArgumentParser(description='训练扩散模型')
+# Command-line arguments
+parser = argparse.ArgumentParser(description='Train diffusion models.')
 parser.add_argument('--gpu', '-g', type=int, default=None, 
-                    help='指定GPU设备ID（例如：0, 1, 2等）。如果不指定，使用默认设备或环境变量CUDA_VISIBLE_DEVICES')
+                    help='GPU device ID. If omitted, use the default device or CUDA_VISIBLE_DEVICES.')
 parser.add_argument('--config', type=str, default=str(script_dir / 'model.yaml'),
-                    help='YAML 配置文件路径')
+                    help='Path to the YAML config file.')
 args = parser.parse_args()
 
-# 设置GPU设备
+# Device setup
 if args.gpu is not None:
     device = torch.device(f'cuda:{args.gpu}' if torch.cuda.is_available() else 'cpu')
-    # 更新denoising_utils模块中的device
+    # Keep the diffusion utilities on the selected device.
     import src_pr.denoising_utils as denoising_utils_module
     denoising_utils_module.device = device
-    print(f'使用指定的GPU: {device}')
+    print(f'Using specified device: {device}')
 else:
-    print(f'使用默认设备: {device}')
+    print(f'Using default device: {device}')
 
 config_path = Path(args.config)
 if not config_path.exists():
@@ -61,7 +57,7 @@ load_path = f'./trained_models/{name}'
 load_model_step = resume_step
 start_iteration = load_model_step + 1 if load_model_flag else 1
 
-# diffusion parameterschat
+# Diffusion parameters
 if config['x0_estimation'] == 'mean':
     use_ddim_x0 = False
 elif config['x0_estimation'] == 'sample':
@@ -84,16 +80,16 @@ diff_steps = config['diff_steps']
 use_dynamic_threshold = False
 self_condition = False
 
-# 投影头参数
-use_projection_heads = config.get('use_projection_heads', False)  # 启用投影头
-projection_positions = config.get('projection_positions', ['encoder', 'bottleneck', 'decoder'])  # 投影头位置
-projection_hidden_dim = config.get('projection_hidden_dim', 64)  # 投影头隐藏层维度
-c_projection = config.get('c_projection', 0.0)  # 投影头损失权重
+# Projection-head parameters
+use_projection_heads = config.get('use_projection_heads', False)
+projection_positions = config.get('projection_positions', ['encoder', 'bottleneck', 'decoder'])
+projection_hidden_dim = config.get('projection_hidden_dim', 64)
+c_projection = config.get('c_projection', 0.0)
 
-# evaluation params（可在 yaml 里覆盖）
+# Evaluation parameters, optionally overridden by YAML.
 test_eval_freq = int(config.get('test_eval_freq', 500))
 sample_freq = int(config.get('sample_freq', 500))
-# 模型 checkpoint 保存间隔（与 sample 无关，每 N iteration 存一次）
+# Save a model checkpoint every N iterations.
 checkpoint_save_freq = int(config.get('checkpoint_save_freq', 500))
 full_sample_freq = 100000
 ema_start = 1000
@@ -161,28 +157,6 @@ elif gov_eqs == 'mechanics':
     # dl_test_level_2 = DataLoader(ds_test_level_2, batch_size = train_batch_size, shuffle=True, generator=torch.Generator(device=device))
     sigmoid_last_channel = True
     train_iterations = int(config.get('train_iterations', 300000))
-elif gov_eqs == 'charge':
-    # [U, rho]  (Poisson: (-Δ)U = rho)
-    input_dim = 2
-    output_dim = 2
-    pixels_at_boundary = True
-    domain_length = 1.0
-    reverse_d1 = False
-    bcs = 'dirichlet0'
-    pixels_per_dim = 64
-    return_optimizer = False
-    return_inequality = False
-    # synthetic dataset: random point charges -> DST Poisson solve
-    no_train = 200000
-    no_valid = 2048
-    ds = DatasetCharge(no_train, pixels_per_dim=pixels_per_dim, domain_length=domain_length, charges_per_sample=2, seed=0, use_double=use_double)
-    ds_valid = DatasetCharge(no_valid, pixels_per_dim=pixels_per_dim, domain_length=domain_length, charges_per_sample=2, seed=10_000, use_double=use_double)
-    if use_ddim_x0:
-        train_batch_size = 16
-    else:
-        train_batch_size = int(config.get('train_batch_size', 64))
-    sigmoid_last_channel = False
-    train_iterations = int(config.get('train_iterations', 150000))
 elif gov_eqs == 'turbulent':
     # single-channel turbulent channel-flow slice, resized to Darcy-style 64x64
     input_dim = 2
@@ -253,15 +227,6 @@ elif gov_eqs == 'mechanics':
         projection_positions = projection_positions,
         projection_hidden_dim = projection_hidden_dim
     ).to(device)
-elif gov_eqs == 'charge':
-    model = Unet3D(
-        dim = 32,
-        channels = output_dim,
-        sigmoid_last_channel = False,
-        use_projection_heads = use_projection_heads,
-        projection_positions = projection_positions,
-        projection_hidden_dim = projection_hidden_dim
-    ).to(device)
 elif gov_eqs == 'turbulent':
     model = Unet3D(
         dim = 32,
@@ -285,12 +250,8 @@ if gov_eqs == 'darcy':
 elif gov_eqs == 'mechanics':
     no_BC_folder = str(script_dir / 'data' / 'mechanics' / 'solidspy_k_no_BC')
     if not os.path.exists(no_BC_folder):
-        raise FileNotFoundError(f'找不到目录: {no_BC_folder}')
+        raise FileNotFoundError(f'Missing directory: {no_BC_folder}')
     residuals = ResidualsMechanics(model = model, pixels_per_dim = pixels_per_dim, pixels_at_boundary = pixels_at_boundary, device = device, bcs = bcs, no_BC_folder = no_BC_folder + '/', topopt_eval = topopt_eval, use_ddim_x0 = use_ddim_x0, ddim_steps = ddim_steps)
-elif gov_eqs == 'charge':
-    if ResidualsCharge is None:
-        raise ImportError('ResidualsCharge module not found. Please ensure src_pr.residuals_charge exists.')
-    residuals = ResidualsCharge(model = model, fd_acc = fd_acc, pixels_per_dim = pixels_per_dim, pixels_at_boundary = pixels_at_boundary, device = device, bcs = bcs, domain_length = domain_length, residual_grad_guidance = residual_grad_guidance, use_ddim_x0 = use_ddim_x0, ddim_steps = ddim_steps)
 elif gov_eqs == 'turbulent':
     residuals = ResidualsTurbulent(
         model = model,
@@ -316,11 +277,11 @@ if wandb_track:
     log_fn = wandb.log
 else:
     log_fn = noop
-log_freq = int(config.get('log_freq', 20))  # 每多少步写一行 training_metrics.csv；可与 checkpoint_save_freq 对齐
+log_freq = int(config.get('log_freq', 20))
     
 output_save_dir = f'./trained_models/{name}'
 os.makedirs(output_save_dir, exist_ok=True)
-# 学长要求：横轴=训练步的曲线数据；与 plot_training_loss_vs_steps.py 对齐（每 log_freq 追加一行）
+# Store training metrics by iteration for plotting.
 _training_metrics_csv = Path(output_save_dir) / 'training_metrics.csv'
 
 
@@ -367,7 +328,7 @@ def reconstruct_validation_batch(batch):
     batch = batch.to(device)
     t_eval = torch.zeros(batch.shape[0], dtype=torch.long, device=batch.device)
 
-    if gov_eqs in ('darcy', 'charge', 'turbulent'):
+    if gov_eqs in ('darcy', 'turbulent'):
         x0 = batch
         model_input = (image_to_b_xy_c(x0), t_eval)
         residual_input = (model_input, )
@@ -435,7 +396,7 @@ for iteration in pbar:
                 _w.writeheader()
             _w.writerow(_tm_row)
     
-    # 更新进度条
+    # Progress-bar update
     pbar.update(1)
     # ema update
     if iteration > ema_start:
@@ -491,9 +452,6 @@ for iteration in pbar:
      # generate and evaluate samples
     if ((iteration % sample_freq == 0) or (iteration == train_iterations)):        
         if gov_eqs == 'darcy':
-            conditioning_input = None
-            sample_shape = (no_samples, output_dim, pixels_per_dim, pixels_per_dim)
-        elif gov_eqs == 'charge':
             conditioning_input = None
             sample_shape = (no_samples, output_dim, pixels_per_dim, pixels_per_dim)
         elif gov_eqs == 'turbulent':
@@ -618,16 +576,16 @@ for iteration in pbar:
         if iteration > 0:
             save_model(config, model, iteration, output_save_dir)
 
-    # ema.restore(residuals.model)  # 暂时禁用，因为验证集评估被禁用了
+    # ema.restore(residuals.model)
 
-    # 定期保存模型，即使评估被禁用
+    # Save periodic checkpoints.
     if iteration > 0 and checkpoint_save_freq > 0 and iteration % checkpoint_save_freq == 0:
         save_model(config, model, iteration, output_save_dir)
-        print(f'模型已在迭代 {iteration} 保存到 {output_save_dir} (每 {checkpoint_save_freq} 步)')
+        print(f'Model saved at iteration {iteration} to {output_save_dir} (every {checkpoint_save_freq} steps)')
 
-# 训练结束后保存最终模型
+# Save the final model.
 save_model(config, model, train_iterations, output_save_dir)
-print(f'最终模型已保存到 {output_save_dir}')
+print(f'Final model saved to {output_save_dir}')
 
 if wandb_track:
     wandb.finish()

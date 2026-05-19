@@ -110,7 +110,7 @@ class ResidualsMechanics:
         :param model: The neural network model to compute the residuals for.
         :param n_steps: Number of steps for time discretization.
         :param E: Young's Modulus.
-        :param nu: Poisson's Ratio.
+        :param nu: elastic material parameter.
         """
         self.gov_eqs = 'mechanics'
         self.model = model # do not change this since we use model in main class (not as a direct instance of ResidualsMechanics)
@@ -118,7 +118,7 @@ class ResidualsMechanics:
         self.deriv_mode = None
         self.pixels_at_boundary = pixels_at_boundary
         self.E = E  # Young's Modulus # NOTE: not required here as we directly use the stiffness matrix from Solidspy (which is based on E=1 and nu=0.3)
-        self.nu = nu  # Poisson's Ratio # same as above
+        self.nu = nu  # same as above
         self.periodic = False
         self.device = device
         if bcs == 'periodic':
@@ -181,11 +181,11 @@ class ResidualsMechanics:
             noisy_in = generalized_b_xy_c_to_image(noisy_in)
             noisy_in_red = resize_image(noisy_in, 64)
 
-        # 初始化投影头相关变量
+        # Projection-output bookkeeping.
         projections = None
         
         if skip_model_call and given_model_output is not None:
-            # 直接使用给定的模型输出（用于投影头残差计算）
+            # Use the provided output for projection-head residuals.
             x0_pred = generalized_b_xy_c_to_image(given_model_output) if len(given_model_output.shape) == 3 else given_model_output
             model_out = x0_pred
         elif pass_through:
@@ -195,7 +195,7 @@ class ResidualsMechanics:
             # model requires 10 channels (fields, vf, strain_energy_dens, von-mises, 4 boundary conditions)
             noisy_in_red = torch.cat((noisy_in_red, bcs_red), dim=1)
             
-            # 准备模型调用参数
+            # Prepare model-call arguments.
             call_kwargs = {}
             if return_projections and hasattr(self.model, 'use_projection_heads') and getattr(self.model, 'use_projection_heads'):
                 call_kwargs['return_projections'] = True
@@ -370,7 +370,7 @@ class ResidualsMechanics:
                 #     compliance_true[i] = ein.einsum(u_sol, f_glob[i], 'i, i ->')
                 # output['optimizer_true'] = compliance_true
 
-        # 添加投影头支持
+        # Attach projection outputs when requested.
         if return_projections and (projections is not None):
             output['projections'] = projections
 

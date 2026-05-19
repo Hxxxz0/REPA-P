@@ -8,7 +8,7 @@ class ResidualsTurbulent:
     """
     Physics-inspired residual wrapper for the turbulent channel-flow dataset.
 
-    Unlike Darcy/Charge, this dataset does not admit a closed PDE residual from the
+    Unlike Darcy, this dataset does not admit a closed PDE residual from the
     available variables, so we expose a residual map composed of:
 
     - wall no-slip residual at y=0

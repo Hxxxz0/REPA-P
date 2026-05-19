@@ -1,6 +1,4 @@
-data/**
-!data/**/
-!data/**/.gitkeep
+data/
 trained_models/
 outputs/
 *.log

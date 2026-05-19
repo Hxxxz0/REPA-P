@@ -3,8 +3,8 @@ import torch
 from torch import nn, einsum
 from functools import partial
 from einops import rearrange
-from einops_exts import rearrange_many
-from rotary_embedding_torch import RotaryEmbedding
+from src_pr.einops_exts import rearrange_many
+from src_pr.rotary_embedding_torch import RotaryEmbedding
 import numpy as np
 
 # helpers functions

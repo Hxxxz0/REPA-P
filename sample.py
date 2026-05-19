@@ -12,7 +12,6 @@ from torch.utils.data import DataLoader
 from src_pr.data_utils import *
 from src_pr.denoising_utils import *
 from src_pr.metrics import calculate_psnr, calculate_ssim
-from src_pr.residuals_charge import ResidualsCharge
 from src_pr.residuals_darcy import ResidualsDarcy
 from src_pr.residuals_mechanics_K import ResidualsMechanics
 from src_pr.residuals_turbulent import ResidualsTurbulent
@@ -96,13 +95,6 @@ def setup_task(config, use_double):
                     return_inequality=True, sigmoid_last_channel=True)
         valid = Dataset_Paths('./data/mechanics/test/valid/fields/', use_double=use_double)
 
-    elif gov_eqs == 'charge':
-        pixels = int(config.get('pixels_per_dim', 64))
-        data.update(input_dim=2, output_dim=2, pixels_per_dim=pixels, pixels_at_boundary=True,
-                    domain_length=1.0, reverse_d1=False, bcs='dirichlet0', return_optimizer=False,
-                    return_inequality=False, sigmoid_last_channel=False)
-        valid = DatasetCharge(int(config.get('no_valid', 2048)), pixels_per_dim=pixels,
-                              domain_length=1.0, charges_per_sample=2, seed=10000, use_double=use_double)
 
     elif gov_eqs == 'turbulent':
         pixels = int(config.get('pixels_per_dim', 64))
@@ -150,11 +142,6 @@ def build_residuals(config, task, model, device, use_ddim_x0, ddim_steps, residu
                                   pixels_at_boundary=task['pixels_at_boundary'], device=device, bcs=task['bcs'],
                                   no_BC_folder='./data/mechanics/solidspy_k_no_BC/', topopt_eval=True,
                                   use_ddim_x0=use_ddim_x0, ddim_steps=ddim_steps)
-    if gov_eqs == 'charge':
-        return ResidualsCharge(model=model, fd_acc=config['fd_acc'], pixels_per_dim=task['pixels_per_dim'],
-                               pixels_at_boundary=task['pixels_at_boundary'], device=device, bcs=task['bcs'],
-                               domain_length=task['domain_length'], residual_grad_guidance=residual_grad_guidance,
-                               use_ddim_x0=use_ddim_x0, ddim_steps=ddim_steps)
     if gov_eqs == 'turbulent':
         return ResidualsTurbulent(model=model, pixels_per_dim=task['pixels_per_dim'], device=device,
                                   lambda_wall=float(config.get('lambda_wall', 0.1)),
@@ -172,7 +159,7 @@ def reconstruct_batch(batch, task, residuals, diffusion_utils, device):
     t_eval = torch.zeros(batch.shape[0], dtype=torch.long, device=device)
     gov_eqs = task['gov_eqs']
 
-    if gov_eqs in ('darcy', 'charge', 'turbulent'):
+    if gov_eqs in ('darcy', 'turbulent'):
         x0 = batch
         residual_input = ((image_to_b_xy_c(x0), t_eval),)
     elif gov_eqs == 'mechanics':
