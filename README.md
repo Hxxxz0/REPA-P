@@ -67,7 +67,7 @@ All settings are in `model.yaml`.
 Choose one dataset:
 
 ```yaml
-gov_eqs: darcy       # darcy, mechanics, charge, turbulent
+gov_eqs: darcy       # darcy, mechanics,  turbulent
 ```
 
 Choose PIDM baseline:
@@ -137,13 +137,13 @@ turbulent_data_path: ./data/ch_2Dxysec.pickle
 Evaluate the latest checkpoint:
 
 ```bash
-python sample.py --name darcy.repap.unet --gpu 0
+python sample.py --name darcy.repap.unet --gpu XXX
 ```
 
 Evaluate a specific checkpoint:
 
 ```bash
-python sample.py --name darcy.repap.unet --step 150000 --gpu 0 --num-batches 4 --save-images
+python sample.py --name darcy.repap.unet --step 150000 --gpu XXX --num-batches 4 --save-images
 ```
 
 Results are written to:
