@@ -1,13 +1,14 @@
 <h1 align="center">🌊 REPA-P for Physics-Informed Diffusion Models 🚀</h1>
 
+<h4 align="center">✨ U-Net code for PIDM baseline and REPA-P 🔬🧠</h4>
 
-$~
+$~$
 
 ## 🧩 Overview
 
 ![REPA-P overview](assets/repa_p_overview.png)
 
-## 📌 Introduction & Setup
+## 📌 Introduction
 
 📚 This repository contains the U-Net implementation used in our REPA-P experiments, built on top of Physics-Informed Diffusion Models (PIDM).
 
@@ -20,36 +21,25 @@ $~
 - ⚡ **Simple workflow**: edit `model.yaml`, train with `main.py`, evaluate with `sample.py`.
 - 📦 **Release friendly**: no datasets, checkpoints, logs, or DiT files are included.
 
-
 🧭 Currently supported tasks:
 
 - 🌊 Darcy flow
 - 🏗️ Topology optimization / mechanics
 - 🌀 Turbulent channel-flow slice
 
-🛠️ The code supports both methods with the same training script:
+---
 
-```yaml
-use_projection_heads: False  # PIDM baseline
-use_projection_heads: True   # REPA-P
-```
-
-📜 We provide two main scripts:
-
-🏃 `main.py` trains the model. Change the dataset, run name, and projection-head switch in `model.yaml`, then run:
+## 🚀 Quick Start
 
 ```bash
-python main.py --config model.yaml --gpu XXX
+pip install -r requirements.txt
+python main.py --config model.yaml --gpu 0
 ```
 
-🔍 `sample.py` evaluates trained models. By default it runs validation reconstruction at `t=0`. Use `--mode generative` for true reverse-diffusion sampling from noise. It reads the saved `model.yaml` from the checkpoint folder, so the same script works for both PIDM and REPA-P:
+`main.py` trains the model. `sample.py` evaluates trained checkpoints. All main settings are controlled in `model.yaml`.
 
-```bash
-python sample.py --name darcy.repap.unet --gpu XXX
-python sample.py --name darcy.repap.unet --gpu XXX --mode generative --num-samples 20 --use-ema
-```
-
-## 📁 Data
+<details>
+<summary><b>📁 Data Setup</b></summary>
 
 🚫 Datasets and checkpoints are not included in this GitHub repository.
 
@@ -82,7 +72,7 @@ python sample.py --name darcy.repap.unet --gpu XXX --mode generative --num-sampl
 
 ### 🌊 Darcy Flow
 
-📥 Use the Darcy flow data from the PIDM release. The training script expects:
+The training script expects:
 
 ```text
 data/darcy/train/p_data.csv
@@ -91,7 +81,7 @@ data/darcy/valid/p_data.csv
 data/darcy/valid/K_data.csv
 ```
 
-✅ Then set:
+Set:
 
 ```yaml
 gov_eqs: darcy
@@ -99,7 +89,7 @@ gov_eqs: darcy
 
 ### 🏗️ Mechanics
 
-📥 Use the topology optimization / mechanics data from the PIDM release. The training script expects:
+The training script expects:
 
 ```text
 data/mechanics/train/fields/
@@ -109,7 +99,7 @@ data/mechanics/test/test_level_2/fields/
 data/mechanics/solidspy_k_no_BC/
 ```
 
-✅ Then set:
+Set:
 
 ```yaml
 gov_eqs: mechanics
@@ -117,38 +107,33 @@ gov_eqs: mechanics
 
 ### 🌀 Turbulent Flow
 
-📥 For turbulent flow, place the processed turbulent channel-flow pickle file here:
+Place the processed turbulent channel-flow pickle file here:
 
 ```text
 data/ch_2Dxysec.pickle
 ```
 
-📐 The expected array layout is:
+Expected array layout:
 
 ```text
 [T, X, Y, C] = [10000, 128, 48, 1]
 ```
 
-🧪 The training code resizes this field to `pixels_per_dim x pixels_per_dim` (default `64x64`) for the U-Net path. This branch does not use a closed PDE residual because the released data contains only one velocity-fluctuation component on a 2D slice. Its residual term is a physics-inspired combination of bottom-wall no-slip and smoothness/gradient regularizers.
-
-✅ Then set:
+Set:
 
 ```yaml
 gov_eqs: turbulent
 turbulent_data_path: ./data/ch_2Dxysec.pickle
 ```
 
-## 🚀 How to Run
+</details>
 
-🧾 All settings are in `model.yaml`.
+<details open>
+<summary><b>🛠️ Training: PIDM vs REPA-P</b></summary>
 
-### 🎯 Choose one dataset
+The same training script supports both PIDM and REPA-P. Change the switch in `model.yaml`.
 
-```yaml
-gov_eqs: darcy       # darcy, mechanics, turbulent
-```
-
-### 🧪 Choose PIDM baseline
+### 🧪 PIDM baseline
 
 ```yaml
 run_name: darcy.pidm.unet
@@ -158,7 +143,7 @@ projection_hidden_dim: 0
 c_projection: 0.0
 ```
 
-### 🔥 Or choose REPA-P
+### 🔥 REPA-P
 
 ```yaml
 run_name: darcy.repap.unet
@@ -171,8 +156,7 @@ c_projection: 0.01
 
 💡 If `use_projection_heads: True`, keep `projection_positions` non-empty and set `c_projection > 0`.
 
-
-### 🏃 Train
+Train with:
 
 ```bash
 python main.py --config model.yaml --gpu 0
@@ -184,12 +168,16 @@ python main.py --config model.yaml --gpu 0
 trained_models/<run_name>/
 ```
 
-## ⚙️ Dataset Settings
+</details>
 
-🧭 Use these typical settings in `model.yaml`:
+<details>
+<summary><b>⚙️ Typical Dataset Settings</b></summary>
+
+Use these typical settings in `model.yaml`.
+
+### 🌊 Darcy
 
 ```yaml
-# 🌊 Darcy
 gov_eqs: darcy
 train_iterations: 150000
 train_batch_size: 64
@@ -197,8 +185,9 @@ c_ineq: 0.0
 lambda_opt: 0.0
 ```
 
+### 🏗️ Mechanics
+
 ```yaml
-# 🏗️ Mechanics
 gov_eqs: mechanics
 train_iterations: 300000
 train_batch_size: 8
@@ -206,15 +195,19 @@ c_ineq: 0.001
 lambda_opt: 0.1
 ```
 
+### 🌀 Turbulent
+
 ```yaml
-# 🌀 Turbulent
 gov_eqs: turbulent
 train_iterations: 150000
 train_batch_size: 64
 turbulent_data_path: ./data/ch_2Dxysec.pickle
 ```
 
-## 📊 Evaluation
+</details>
+
+<details>
+<summary><b>📊 Evaluation</b></summary>
 
 🔍 Reconstruction evaluation on validation data at `t=0`:
 
@@ -240,14 +233,17 @@ python sample.py --name darcy.repap.unet --step 150000 --gpu XXX --mode generati
 trained_models/<run_name>/evaluation/step_<step>/
 ```
 
-## 📦 Dependencies
+</details>
 
-🛠️ Install dependencies with:
+<details>
+<summary><b>📦 Dependencies</b></summary>
+
+Install dependencies with:
 
 ```bash
 pip install -r requirements.txt
 ```
 
-🧰 Main packages include `torch`, `numpy`, `pandas`, `matplotlib`, `tqdm`, `einops`, `torchvision`, `findiff`, `solidspy`, `scikit-image`, `pyyaml`, `imageio`, `opencv-python`, `scipy`, `scikit-learn`, `dill`, and optional `wandb`.
+Main packages include `torch`, `numpy`, `pandas`, `matplotlib`, `tqdm`, `einops`, `torchvision`, `findiff`, `solidspy`, `scikit-image`, `pyyaml`, `imageio`, `opencv-python`, `scipy`, `scikit-learn`, `dill`, and optional `wandb`.
 
-
+</details>
