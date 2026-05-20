@@ -1,9 +1,5 @@
 <h1 align="center">🌊 REPA-P for Physics-Informed Diffusion Models 🚀</h1>
 
-<h4 align="center">✨ U-Net code for PIDM baseline and REPA-P 🔬🧠</h4>
-
-$~$
-
 ## 🧩 Overview
 
 ![REPA-P overview](assets/repa_p_overview.png)
