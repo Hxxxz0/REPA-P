@@ -1,8 +1,7 @@
 <h1 align="center">🌊 REPA-P for Physics-Informed Diffusion Models 🚀</h1>
 
-<h4 align="center">✨ U-Net code for PIDM baseline and REPA-P 🔬🧠</h4>
 
-$~$
+$~
 
 ## 🧩 Overview
 
@@ -52,13 +51,11 @@ python sample.py --name darcy.repap.unet --gpu XXX --mode generative --num-sampl
 
 ## 📁 Data
 
-🚫 Datasets and checkpoints are not included in this repository.
+🚫 Datasets and checkpoints are not included in this GitHub repository.
 
-⬇️ For the PIDM benchmark data used by the original Darcy flow and mechanics studies, download the data and pretrained models from the ETH Zurich Research Collection:
+⬇️ For Darcy flow and mechanics, use the same benchmark data as the original PIDM repository. Download the data and pretrained models from the [ETHZ Research Collection](https://doi.org/10.3929/ethz-b-000674074).
 
-🔗 https://doi.org/10.3929/ethz-b-000674074
-
-🗂️ After downloading and unzipping the files, place the data under this repository as follows:
+🗂️ After downloading and unzipping, copy the extracted `data/darcy` and `data/mechanics` folders into this repository. The final layout should look like this:
 
 ```text
 .
@@ -78,8 +75,10 @@ python sample.py --name darcy.repap.unet --gpu XXX --mode generative --num-sampl
 │   │   └── solidspy_k_no_BC
 │   └── ch_2Dxysec.pickle
 └── trained_models
-    └── ...
+    └── ...                 # optional; only needed for evaluating existing checkpoints
 ```
+
+💡 If you train from scratch with `main.py`, only the `data/` folder is required. The `trained_models/` folder will be created automatically.
 
 ### 🌊 Darcy Flow
 
