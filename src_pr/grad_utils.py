@@ -152,7 +152,6 @@ class StencilGradients(nn.Module):
     def __init__(self, d0=1, d1=1, fd_acc = 2, periodic=False, device = 'cpu'):
         super(StencilGradients, self).__init__()
         self.d_d0 = StencilGradientComputation(FinDiff(0, d0, 1, acc=fd_acc).stencil((99,99)).data, periodic, device)
-        self.d_d0 = StencilGradientComputation(FinDiff(0, d0, 1, acc=fd_acc).stencil((99,99)).data, periodic, device)
         self.d_d1 = StencilGradientComputation(FinDiff(1, d1, 1, acc=fd_acc).stencil((99,99)).data, periodic, device)
         self.d_d00 = StencilGradientComputation(FinDiff(0, d0, 2, acc=fd_acc).stencil((99,99)).data, periodic, device)
         self.d_d11 = StencilGradientComputation(FinDiff(1, d1, 2, acc=fd_acc).stencil((99,99)).data, periodic, device)

@@ -11,7 +11,9 @@ solidspy
 scikit-image
 pyyaml
 imageio
-wandb
-scipy
-scikit-learn
+scipy>=1.9
+scikit-learn>=1.1
+scikit-image>=0.19
 dill
+findiff>=0.10
+solidspy

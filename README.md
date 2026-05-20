@@ -1,245 +1,122 @@
-<h1 align="center">🌊 REPA-P for Physics-Informed Diffusion Models 🚀</h1>
+<div align="center">
 
-## 🧩 Overview
+# Learning to Think in Physics: Breaking Shortcut Learning in Scientific Diffusion via Representation Alignment
 
-![REPA-P overview](assets/repa_p_overview.png)
+**Accepted by ICML 2026**
 
-## 📌 Introduction
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
+[![Python](https://img.shields.io/badge/python-3.10+-blue.svg)](https://docs.python.org/3/)
+[![PyTorch](https://img.shields.io/badge/pytorch-2.0+-ee4c2c.svg)](https://pytorch.org/)
 
-📚 This repository contains the U-Net implementation used in our REPA-P experiments, built on top of Physics-Informed Diffusion Models (PIDM).
+<img src="assets/repa_p_overview.png" width="100%" alt="REPA-P Overview"/>
 
-### 🌟 Highlights
+</div>
 
-- 🔬 **Physics-informed diffusion**: train diffusion models with physics residual or physics-inspired guidance.
-- 🧠 **REPA-P**: add projection heads to align intermediate representations with physical constraints.
-- 🧱 **PIDM baseline included**: switch between PIDM and REPA-P from the same YAML file.
-- 🌀 **Three benchmark systems**: Darcy flow, mechanics, and turbulent flow.
-- ⚡ **Simple workflow**: edit `model.yaml`, train with `main.py`, evaluate with `sample.py`.
-- 📦 **Release friendly**: no datasets, checkpoints, logs, or DiT files are included.
+## 🗞️ News
+- **`2026-05-01`**: 🔥🔥🔥 Code of **REPA-P** released! Welcome to Star! ⭐
+- **`2026-01-23`**: 🔥🔥 **REPA-P** accepted to **ICML 2026**!
 
-🧭 Currently supported tasks:
+## 📌 Overview
 
-- 🌊 Darcy flow
-- 🏗️ Topology optimization / mechanics
-- 🌀 Turbulent channel-flow slice
+**REPA-P** is a teacher-free, architecture-agnostic framework that aligns intermediate representations with physical states in diffusion models. It attaches lightweight **1×1 projection heads** to selected layers, decodes hidden activations into physical quantities, and applies PDE residual losses during training. These heads are **discarded at inference**, introducing **zero overhead**.
 
----
+REPA-P compels the network to *"think in physics"* rather than memorizing statistical shortcuts, leading to faster convergence, lower physics residuals, and stronger out-of-distribution generalization across multiple PDE benchmarks.
+
+## 🎯 Highlights
+- ⚡ **Teacher-free & lightweight** — only needs 1×1 conv heads, no external teacher model
+- 🧠 **Breaks shortcut learning** — forces intermediate features to encode valid physical states
+- 🚀 **Zero inference overhead** — projection heads discarded after training
+- 🔧 **Architecture-agnostic** — consistent gains on both U-Net and Diffusion Transformer (DiT)
+- 🌊 **Four PDE benchmarks** — Darcy flow, topology optimization (mechanics), Poisson equation, and turbulent channel flow
+
+## ⚙️ Installation
+
+```bash
+git clone https://github.com/Hxxxz0/REPA-P.git
+cd REPA-P
+pip install -r requirements.txt
+```
 
 ## 🚀 Quick Start
 
 ```bash
-pip install -r requirements.txt
-python main.py --config model.yaml --gpu 0
+# Train
+python main.py --config configs/model.darcy.pidm.yaml --gpu 0
+
+# Evaluate (reconstruction)
+python sample.py --name darcy.pidm.unet --step 150000 --gpu 0 --mode reconstruction
+
+# Evaluate (generative)
+python sample.py --name darcy.repap.unet --step 150000 --gpu 0 --mode generative --num-samples 20 --use-ema --save-images
 ```
 
-`main.py` trains the model. `sample.py` evaluates trained checkpoints. All main settings are controlled in `model.yaml`.
+## 📂 Benchmarks & Configs
 
-<details>
-<summary><b>📁 Data Setup</b></summary>
+| Benchmark | PIDM Config | REPA-P Config | Type |
+|-----------|-------------|---------------|------|
+| 🌊 Darcy Flow | `model.darcy.pidm.yaml` | `model.darcy.repap.yaml` | Unconditional |
+| ⚡ Poisson | `model.poisson_pidm.yaml` | `model.poisson_repap.yaml` | Conditional |
+| 🏗️ Mechanics | `model.mechanics.yaml` | *(set `use_projection_heads: True`)* | Conditional |
+| 🌀 Turbulent | `model.turbulent.yaml` | *(set `use_projection_heads: True`)* | Unconditional |
 
-🚫 Datasets and checkpoints are not included in this GitHub repository.
-
-⬇️ For Darcy flow and mechanics, use the same benchmark data as the original PIDM repository. Download the data and pretrained models from the [ETHZ Research Collection](https://doi.org/10.3929/ethz-b-000674074).
-
-🗂️ After downloading and unzipping, copy the extracted `data/darcy` and `data/mechanics` folders into this repository. The final layout should look like this:
-
-```text
-.
-├── data
-│   ├── darcy
-│   │   ├── train
-│   │   │   ├── p_data.csv
-│   │   │   └── K_data.csv
-│   │   └── valid
-│   │       ├── p_data.csv
-│   │       └── K_data.csv
-│   ├── mechanics
-│   │   ├── train/fields
-│   │   ├── test/valid/fields
-│   │   ├── test/test_level_1/fields
-│   │   ├── test/test_level_2/fields
-│   │   └── solidspy_k_no_BC
-│   └── ch_2Dxysec.pickle
-└── trained_models
-    └── ...                 # optional; only needed for evaluating existing checkpoints
-```
-
-💡 If you train from scratch with `main.py`, only the `data/` folder is required. The `trained_models/` folder will be created automatically.
-
-### 🌊 Darcy Flow
-
-The training script expects:
-
-```text
-data/darcy/train/p_data.csv
-data/darcy/train/K_data.csv
-data/darcy/valid/p_data.csv
-data/darcy/valid/K_data.csv
-```
-
-Set:
+Toggle REPA-P by setting in your config:
 
 ```yaml
-gov_eqs: darcy
-```
-
-### 🏗️ Mechanics
-
-The training script expects:
-
-```text
-data/mechanics/train/fields/
-data/mechanics/test/valid/fields/
-data/mechanics/test/test_level_1/fields/
-data/mechanics/test/test_level_2/fields/
-data/mechanics/solidspy_k_no_BC/
-```
-
-Set:
-
-```yaml
-gov_eqs: mechanics
-```
-
-### 🌀 Turbulent Flow
-
-Place the processed turbulent channel-flow pickle file here:
-
-```text
-data/ch_2Dxysec.pickle
-```
-
-Expected array layout:
-
-```text
-[T, X, Y, C] = [10000, 128, 48, 1]
-```
-
-Set:
-
-```yaml
-gov_eqs: turbulent
-turbulent_data_path: ./data/ch_2Dxysec.pickle
-```
-
-</details>
-
-<details open>
-<summary><b>🛠️ Training: PIDM vs REPA-P</b></summary>
-
-The same training script supports both PIDM and REPA-P. Change the switch in `model.yaml`.
-
-### 🧪 PIDM baseline
-
-```yaml
-run_name: darcy.pidm.unet
-use_projection_heads: False
-projection_positions: []
-projection_hidden_dim: 0
-c_projection: 0.0
-```
-
-### 🔥 REPA-P
-
-```yaml
-run_name: darcy.repap.unet
 use_projection_heads: True
-projection_positions:
-  - decoder
+projection_positions: [decoder]   # encoder / bottleneck / decoder / output
 projection_hidden_dim: 128
 c_projection: 0.01
 ```
 
-💡 If `use_projection_heads: True`, keep `projection_positions` non-empty and set `c_projection > 0`.
+For detailed parameter descriptions, see the reference config [`model.yaml`](model.yaml).
 
-Train with:
+## 📊 Data
 
+### 🌊 Darcy Flow
+Download from [ETHZ Research Collection](https://doi.org/10.3929/ethz-b-000674074). Place `p_data.csv` and `K_data.csv` under `data/darcy/train/` and `data/darcy/valid/`.
+
+### ⚡ Poisson Equation
 ```bash
-python main.py --config model.yaml --gpu 0
-```
-
-📦 Training outputs are saved to:
-
-```text
-trained_models/<run_name>/
-```
-
-</details>
-
-<details>
-<summary><b>⚙️ Typical Dataset Settings</b></summary>
-
-Use these typical settings in `model.yaml`.
-
-### 🌊 Darcy
-
-```yaml
-gov_eqs: darcy
-train_iterations: 150000
-train_batch_size: 64
-c_ineq: 0.0
-lambda_opt: 0.0
+python src_pr/data_generation_poisson.py --train_samples 2000 --valid_samples 200 --output_dir ./data/poisson
 ```
 
 ### 🏗️ Mechanics
+Download from [ETHZ Research Collection](https://doi.org/10.3929/ethz-b-000674074). Place under `data/mechanics/`.
 
-```yaml
-gov_eqs: mechanics
-train_iterations: 300000
-train_batch_size: 8
-c_ineq: 0.001
-lambda_opt: 0.1
-```
+### 🌀 Turbulent Flow
+Place the processed channel-flow pickle at `data/ch_2Dxysec.pickle`.
 
-### 🌀 Turbulent
+## 🛠️ Usage
 
-```yaml
-gov_eqs: turbulent
-train_iterations: 150000
-train_batch_size: 64
-turbulent_data_path: ./data/ch_2Dxysec.pickle
-```
-
-</details>
-
-<details>
-<summary><b>📊 Evaluation</b></summary>
-
-🔍 Reconstruction evaluation on validation data at `t=0`:
+**Training** — pick a config and run:
 
 ```bash
-python sample.py --name darcy.repap.unet --gpu XXX
+python main.py --config configs/model.darcy.pidm.yaml --gpu 0
 ```
 
-🎯 Reconstruction evaluation for a specific checkpoint:
+Checkpoints and logs are saved to `trained_models/<run_name>/`.
+
+**Evaluation** — reconstruction (t=0 denoising) or generative sampling from noise:
 
 ```bash
-python sample.py --name darcy.repap.unet --step 150000 --gpu XXX --num-batches 4 --save-images
+python sample.py --name <run_name> --step <checkpoint_step> --gpu 0 --mode reconstruction
+python sample.py --name <run_name> --step <checkpoint_step> --gpu 0 --mode generative --use-ema --save-images
 ```
 
-🎲 Generative reverse-diffusion sampling from noise:
+## 📄 Citation
 
-```bash
-python sample.py --name darcy.repap.unet --step 150000 --gpu XXX --mode generative --num-samples 20 --use-ema --save-images
+```bibtex
+@inproceedings{jia2026learning,
+  title={Learning to Think in Physics: Breaking Shortcut Learning in
+         Scientific Diffusion via Representation Alignment},
+  author={Jia, Haozhe and Yin, Pengyu and Chen, Wenshuo and Liang, Shaofeng
+          and Wang, Lei and Tian, Bowen and Wang, Xiucheng and Jia, Nanqian
+          and Yue, Yutao},
+  booktitle={International Conference on Machine Learning (ICML)},
+  year={2026}
+}
 ```
 
-📁 Results are written to:
+## 📜 License
 
-```text
-trained_models/<run_name>/evaluation/step_<step>/
-```
-
-</details>
-
-<details>
-<summary><b>📦 Dependencies</b></summary>
-
-Install dependencies with:
-
-```bash
-pip install -r requirements.txt
-```
-
-Main packages include `torch`, `numpy`, `pandas`, `matplotlib`, `tqdm`, `einops`, `torchvision`, `findiff`, `solidspy`, `scikit-image`, `pyyaml`, `imageio`, `opencv-python`, `scipy`, `scikit-learn`, `dill`, and optional `wandb`.
-
-</details>
+This project is licensed under the [MIT License](./LICENSE).

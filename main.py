@@ -34,6 +34,7 @@ from src_pr.unet_new import Unet3D
 from src_pr.residuals_darcy import ResidualsDarcy
 from src_pr.residuals_mechanics_K import ResidualsMechanics
 from src_pr.residuals_turbulent import ResidualsTurbulent
+from src_pr.residuals_poisson import ResidualsPoisson
 
 
 def normalize_positions(value):
@@ -55,7 +56,7 @@ def normalize_positions(value):
 
 def validate_config(config, projection_positions):
     gov_eqs = config.get('gov_eqs')
-    if gov_eqs not in {'darcy', 'mechanics', 'turbulent'}:
+    if gov_eqs not in {'darcy', 'mechanics', 'turbulent', 'poisson'}:
         raise ValueError("gov_eqs must be one of: 'darcy', 'mechanics', 'turbulent'.")
 
     x0_estimation = config.get('x0_estimation')
@@ -245,6 +246,27 @@ elif gov_eqs == 'turbulent':
         train_batch_size = int(config.get('train_batch_size', 64))
     sigmoid_last_channel = False
     train_iterations = int(config.get('train_iterations', 150000))
+elif gov_eqs == 'poisson':
+    # Conditional generation: rho -> U
+    input_dim = 2
+    output_dim = 1
+    pixels_at_boundary = True
+    domain_length = 1.
+    reverse_d1 = False
+    data_paths = ('./data/poisson/train/rho_data.csv', './data/poisson/train/U_data.csv')
+    data_paths_valid = ('./data/poisson/valid/rho_data.csv', './data/poisson/valid/U_data.csv')
+    bcs = 'none'
+    pixels_per_dim = 64
+    return_optimizer = False
+    return_inequality = False
+    ds = Dataset(data_paths, use_double=use_double)
+    ds_valid = Dataset(data_paths_valid, use_double=use_double)
+    if use_ddim_x0:
+        train_batch_size = 8
+    else:
+        train_batch_size = int(config.get('train_batch_size', 8))
+    sigmoid_last_channel = False
+    train_iterations = int(config.get('train_iterations', 20000))
 else:
     raise ValueError('Unknown governing equations.')
 
@@ -288,6 +310,16 @@ elif gov_eqs == 'turbulent':
         projection_positions = projection_positions,
         projection_hidden_dim = projection_hidden_dim
     ).to(device)
+elif gov_eqs == 'poisson':
+    model = Unet3D(
+        dim = 64,
+        channels = output_dim + 1,  # U (1ch) + rho condition (1ch)
+        out_dim = output_dim,
+        sigmoid_last_channel = False,
+        use_projection_heads = use_projection_heads,
+        projection_positions = projection_positions,
+        projection_hidden_dim = projection_hidden_dim
+    ).to(device)
 else:
     raise ValueError('Unknown governing equations, cannot create model.')
 num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -312,6 +344,17 @@ elif gov_eqs == 'turbulent':
         lambda_near_wall = lambda_near_wall,
         near_wall_rows = near_wall_rows,
         residual_grad_guidance = residual_grad_guidance,
+        use_ddim_x0 = use_ddim_x0,
+        ddim_steps = ddim_steps,
+    )
+elif gov_eqs == 'poisson':
+    residuals = ResidualsPoisson(
+        model = model,
+        pixels_per_dim = pixels_per_dim,
+        pixels_at_boundary = pixels_at_boundary,
+        device = device,
+        domain_length = domain_length,
+        fd_acc = fd_acc,
         use_ddim_x0 = use_ddim_x0,
         ddim_steps = ddim_steps,
     )
@@ -389,6 +432,12 @@ def reconstruct_validation_batch(batch):
         x0 = batch
         model_input = (image_to_b_xy_c(x0), t_eval)
         residual_input = (model_input, )
+    elif gov_eqs == 'poisson':
+        rho = batch[:, 0:1]  # [B, 1, H, W]
+        x0 = batch[:, 1:2]   # [B, 1, H, W]
+        x_cond = torch.cat([x0, rho], dim=1)
+        model_input = (image_to_b_xy_c(x_cond), t_eval)
+        residual_input = (model_input, rho)
     elif gov_eqs == 'mechanics':
         conditioning, x0, bcs = torch.tensor_split(batch, (3, 6), dim=1)
         vf = conditioning[:, 0, 0, 0]
@@ -520,6 +569,13 @@ for iteration in pbar:
             conditioning_input = None
             n_samples_this_step = no_samples
             sample_shape = (n_samples_this_step, output_dim, pixels_per_dim, pixels_per_dim)
+        elif gov_eqs == 'poisson':
+            cur_batch = next(dl_valid).to(device)
+            n_samples_this_step = min(no_samples, cur_batch.shape[0])
+            sample_shape = (n_samples_this_step, output_dim, pixels_per_dim, pixels_per_dim)
+            cur_batch = cur_batch[torch.randperm(cur_batch.shape[0], device=device)[:n_samples_this_step]]
+            rho_samples = cur_batch[:, 0:1]
+            conditioning_input = rho_samples
         elif gov_eqs == 'turbulent':
             conditioning_input = None
             n_samples_this_step = no_samples

@@ -21,6 +21,7 @@ from src_pr.metrics import calculate_psnr, calculate_ssim
 from src_pr.residuals_darcy import ResidualsDarcy
 from src_pr.residuals_mechanics_K import ResidualsMechanics
 from src_pr.residuals_turbulent import ResidualsTurbulent
+from src_pr.residuals_poisson import ResidualsPoisson
 from src_pr.unet_new import Unet3D
 
 script_dir = Path(__file__).parent.absolute()
@@ -46,8 +47,8 @@ def normalize_positions(value):
 
 def validate_config(config):
     gov_eqs = config.get('gov_eqs')
-    if gov_eqs not in {'darcy', 'mechanics', 'turbulent'}:
-        raise ValueError("gov_eqs must be one of: 'darcy', 'mechanics', 'turbulent'.")
+    if gov_eqs not in {'darcy', 'mechanics', 'turbulent', 'poisson'}:
+        raise ValueError("gov_eqs must be one of: 'darcy', 'mechanics', 'turbulent', 'poisson'.")
     if gov_eqs != 'darcy' and bool(config.get('residual_grad_guidance', False)):
         raise ValueError('Residual gradient guidance is only implemented for Darcy.')
     if bool(config.get('use_projection_heads', False)):
@@ -132,6 +133,12 @@ def setup_task(config, use_double):
                                        pixels_per_dim=pixels, split='valid',
                                        train_fraction=float(config.get('turbulent_train_fraction', 0.9)),
                                        use_double=use_double)
+    elif gov_eqs == 'poisson':
+        data.update(input_dim=2, output_dim=1, pixels_per_dim=64, pixels_at_boundary=True,
+                    domain_length=1.0, reverse_d1=False, bcs='none', return_optimizer=False,
+                    return_inequality=False, sigmoid_last_channel=False)
+        valid = Dataset(('./data/poisson/valid/rho_data.csv', './data/poisson/valid/U_data.csv'),
+                       use_double=use_double)
     else:
         raise ValueError(f'Unknown gov_eqs: {gov_eqs}')
 
@@ -153,6 +160,8 @@ def build_model(config, task, device):
     )
     if gov_eqs == 'mechanics':
         return Unet3D(dim=128, channels=task['output_dim'] + 3 + 4, out_dim=task['output_dim'], **kwargs).to(device)
+    if gov_eqs == 'poisson':
+        return Unet3D(dim=64, channels=task['output_dim'] + 1, out_dim=task['output_dim'], **kwargs).to(device)
     return Unet3D(dim=32, channels=task['output_dim'], **kwargs).to(device)
 
 
@@ -178,6 +187,11 @@ def build_residuals(config, task, model, device, use_ddim_x0, ddim_steps, residu
                                   near_wall_rows=int(config.get('near_wall_rows', 3)),
                                   residual_grad_guidance=residual_grad_guidance,
                                   use_ddim_x0=use_ddim_x0, ddim_steps=ddim_steps)
+    if gov_eqs == 'poisson':
+        return ResidualsPoisson(model=model, pixels_per_dim=task['pixels_per_dim'],
+                                pixels_at_boundary=task['pixels_at_boundary'], device=device,
+                                domain_length=task['domain_length'], fd_acc=config['fd_acc'],
+                                use_ddim_x0=use_ddim_x0, ddim_steps=ddim_steps)
     raise ValueError(f'Unknown gov_eqs: {gov_eqs}')
 
 
@@ -189,6 +203,11 @@ def reconstruct_batch(batch, task, residuals, diffusion_utils, device):
     if gov_eqs in ('darcy', 'turbulent'):
         x0 = batch
         residual_input = ((image_to_b_xy_c(x0), t_eval),)
+    elif gov_eqs == 'poisson':
+        rho = batch[:, 0:1]
+        x0 = batch[:, 1:2]
+        x_cond = torch.cat([x0, rho], dim=1)
+        residual_input = ((image_to_b_xy_c(x_cond), t_eval), rho)
     elif gov_eqs == 'mechanics':
         conditioning, x0, bcs = torch.tensor_split(batch, (3, 6), dim=1)
         vf = conditioning[:, 0, 0, 0]
@@ -263,6 +282,13 @@ def run_generative_eval(args, task, residuals, diffusion_utils, dl_valid, output
         conditioning_input = None
         sample_shape = (num_samples, task['output_dim'], task['pixels_per_dim'], task['pixels_per_dim'])
         n_samples = num_samples
+    elif gov_eqs == 'poisson':
+        batch = next(iter(dl_valid)).to(device)
+        n = min(num_samples, batch.shape[0])
+        batch = batch[torch.randperm(batch.shape[0], device=device)[:n]]
+        conditioning_input = batch[:, 0:1]  # rho
+        sample_shape = (n, task['output_dim'], task['pixels_per_dim'], task['pixels_per_dim'])
+        n_samples = n
     elif gov_eqs == 'mechanics':
         conditioning_input, n_samples = build_mechanics_conditioning(next(iter(dl_valid)), num_samples, device)
         sample_shape = (n_samples, task['output_dim'], task['pixels_per_dim'] + 1, task['pixels_per_dim'] + 1)

@@ -425,8 +425,12 @@ class DenoisingDiffusion(nn.Module):
         """
         x_init = x.clone().detach()        
         if conditioning_input is not None:
-            conditioning, bcs, solution = conditioning_input 
-            x = torch.cat((x, conditioning), dim = 1)
+            if residual_func.gov_eqs == 'poisson':
+                rho_cond_sample = conditioning_input
+                x = torch.cat((x, rho_cond_sample), dim=1)
+            elif residual_func.gov_eqs == 'mechanics':
+                conditioning, bcs, solution = conditioning_input
+                x = torch.cat((x, conditioning), dim=1)
         batch_size = len(x)
         assert correction_mode in ['x0', 'xt'] or not residual_correction, 'Correction mode unknown or not given.'
         
@@ -442,6 +446,9 @@ class DenoisingDiffusion(nn.Module):
         # evaluate residuals at last timestep if required
         if residual_func.gov_eqs in ('darcy', 'turbulent'):
             residual_input = (model_input, )
+            sample = True
+        if residual_func.gov_eqs == 'poisson':
+            residual_input = (model_input, rho_cond_sample)
             sample = True
         if residual_func.gov_eqs == 'mechanics':       
             vf = conditioning[:,0,0,0]
@@ -726,6 +733,10 @@ class DenoisingDiffusion(nn.Module):
         
         if residual_func.gov_eqs in ('darcy', 'turbulent'):
             x_0 = input
+        if residual_func.gov_eqs == 'poisson':
+            # input: [B, 2, H, W] = (rho, U)
+            rho_cond = input[:, 0:1]  # charge density condition
+            x_0 = input[:, 1:2]       # potential U (target)
         if residual_func.gov_eqs == 'mechanics':            
             conditioning, x_0, bcs = torch.tensor_split(input, (3, 6), dim=1) # vf_arr, strain_energy_density_fem, von_mises_stress, disp_x, disp_y, E_field, BC_node_x, BC_node_y, load_x_img, load_y_img
 
@@ -739,7 +750,9 @@ class DenoisingDiffusion(nn.Module):
 
         if residual_func.gov_eqs == 'mechanics':
             x = torch.cat((x, conditioning), dim=1)
-            
+        if residual_func.gov_eqs == 'poisson':
+            x = torch.cat((x, rho_cond), dim=1)  # [U_t, rho]
+
         x = image_to_b_xy_c(x) # we reshape this later to an image in U-net model class but let's be consistent here with the operator model
         model_input = (x, t)
 
@@ -754,6 +767,8 @@ class DenoisingDiffusion(nn.Module):
 
         if residual_func.gov_eqs in ('darcy', 'turbulent'):
             residual_input = (model_input, )
+        if residual_func.gov_eqs == 'poisson':
+            residual_input = (model_input, rho_cond)
         if residual_func.gov_eqs == 'mechanics':
             vf = conditioning[:,0,0,0]
             residual_input = (model_input, bcs, vf, x_0)
@@ -859,6 +874,8 @@ class DenoisingDiffusion(nn.Module):
                 
                 if residual_func.gov_eqs in ('darcy', 'turbulent'):
                     proj_residual_input = (proj_model_input, )
+                elif residual_func.gov_eqs == 'poisson':
+                    proj_residual_input = (proj_model_input, rho_cond)
                 elif residual_func.gov_eqs == 'mechanics':
                     proj_residual_input = (proj_model_input, bcs, vf, x_0)
                 else:
